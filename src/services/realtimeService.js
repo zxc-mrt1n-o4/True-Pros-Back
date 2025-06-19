@@ -1,72 +1,36 @@
 import { supabase } from '../config/supabase.js';
 import { notifyNewCallback, notifyCallbackCompleted, sendErrorNotification } from './telegramBot.js';
 
-let realtimeChannel = null;
+let realtimeSubscription = null;
 
-// Initialize realtime subscription with minimal logging
+// Initialize realtime subscription using new Supabase JS implementation
 export const initializeRealtime = () => {
   try {
-    // Create a clean subscription - let Supabase handle all connection management
-    realtimeChannel = supabase
-      .channel('callback_requests_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'callback_requests'
-        },
-        handleRealtimeEvent
-      )
-      .subscribe((status) => {
-        // Only log when successfully connected - ignore all reconnection states
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Successfully subscribed to callback_requests changes');
-        }
-        // Supabase automatically handles: CHANNEL_ERROR, TIMED_OUT, CLOSED states
-        // No manual intervention needed - this prevents reconnection spam
-      });
+    console.log('📡 Initializing Supabase realtime subscription...');
+    
+    // Subscribe to changes in the callback_requests table
+    realtimeSubscription = supabase
+      .from('callback_requests')
+      .on('INSERT', (payload) => {
+        console.log('🆕 New callback request:', payload.new);
+        handleNewCallback(payload.new);
+      })
+      .on('UPDATE', (payload) => {
+        console.log('🔄 Updated callback request:', payload.new);
+        handleCallbackUpdate(payload.new, payload.old);
+      })
+      .on('DELETE', (payload) => {
+        console.log('🗑️ Deleted callback request:', payload.old);
+        handleCallbackDelete(payload.old);
+      })
+      .subscribe();
 
-    return realtimeChannel;
+    console.log('✅ Successfully subscribed to callback_requests changes');
+    return realtimeSubscription;
   } catch (error) {
     console.error('❌ Error initializing realtime:', error);
-    // Only notify for critical startup failures, not connection issues
-    if (!error.message?.includes('WebSocket') && !error.message?.includes('connection') && !error.message?.includes('timeout')) {
-      sendErrorNotification(`Critical realtime error: ${error.message}`);
-    }
+    sendErrorNotification(`Critical realtime error: ${error.message}`);
     return null;
-  }
-};
-
-// Handle realtime events
-const handleRealtimeEvent = async (payload) => {
-  try {
-    const { eventType, new: newRecord, old: oldRecord } = payload;
-    
-    console.log('📡 Realtime event received:', {
-      eventType,
-      recordId: newRecord?.id || oldRecord?.id
-    });
-
-    switch (eventType) {
-      case 'INSERT':
-        await handleNewCallback(newRecord);
-        break;
-        
-      case 'UPDATE':
-        await handleCallbackUpdate(newRecord, oldRecord);
-        break;
-        
-      case 'DELETE':
-        await handleCallbackDelete(oldRecord);
-        break;
-        
-      default:
-        console.log('🔄 Unknown realtime event type:', eventType);
-    }
-  } catch (error) {
-    console.error('❌ Error handling realtime event:', error);
-    await sendErrorNotification(`Realtime event handling error: ${error.message}`);
   }
 };
 
@@ -92,14 +56,14 @@ const handleCallbackUpdate = async (newRecord, oldRecord) => {
     console.log('🔄 Callback updated:', newRecord.id);
     
     // Check if status changed to completed
-    if (oldRecord.status !== 'completed' && newRecord.status === 'completed') {
+    if (oldRecord?.status !== 'completed' && newRecord.status === 'completed') {
       console.log('✅ Callback completed:', newRecord.id);
       await notifyCallbackCompleted(newRecord);
     }
     
     // Log other significant status changes
-    if (oldRecord.status !== newRecord.status) {
-      console.log(`📊 Status changed for ${newRecord.id}: ${oldRecord.status} → ${newRecord.status}`);
+    if (oldRecord?.status !== newRecord.status) {
+      console.log(`📊 Status changed for ${newRecord.id}: ${oldRecord?.status || 'undefined'} → ${newRecord.status}`);
     }
   } catch (error) {
     console.error('❌ Error handling callback update:', error);
@@ -112,7 +76,7 @@ const handleCallbackDelete = async (deletedRecord) => {
   try {
     console.log('🗑️ Callback deleted:', deletedRecord.id);
     
-    // You might want to notify about deletions if needed
+    // Optional: notify about deletions if needed
     // await sendSystemNotification(`Заявка ${deletedRecord.id} была удалена`);
   } catch (error) {
     console.error('❌ Error handling callback deletion:', error);
@@ -121,23 +85,22 @@ const handleCallbackDelete = async (deletedRecord) => {
 
 // Get realtime connection status
 export const getRealtimeStatus = () => {
-  if (!realtimeChannel) {
-    return { status: 'disconnected', channel: null };
+  if (!realtimeSubscription) {
+    return { status: 'disconnected', subscription: null };
   }
   
   return {
-    status: realtimeChannel.state,
-    channel: realtimeChannel.topic,
-    joinRef: realtimeChannel.joinRef
+    status: 'subscribed',
+    subscription: realtimeSubscription
   };
 };
 
 // Disconnect realtime
 export const disconnectRealtime = async () => {
   try {
-    if (realtimeChannel) {
-      await supabase.removeChannel(realtimeChannel);
-      realtimeChannel = null;
+    if (realtimeSubscription) {
+      await supabase.removeSubscription(realtimeSubscription);
+      realtimeSubscription = null;
       console.log('📡 Realtime subscription disconnected');
     }
   } catch (error) {
@@ -145,7 +108,7 @@ export const disconnectRealtime = async () => {
   }
 };
 
-// Manual reconnect (rarely used - Supabase handles this automatically)
+// Manual reconnect
 export const reconnectRealtime = async () => {
   try {
     console.log('🔄 Manual reconnection requested...');
@@ -158,19 +121,18 @@ export const reconnectRealtime = async () => {
   }
 };
 
-// Minimal health monitoring - trust Supabase's built-in reconnection
+// Simplified health monitoring
 export const startRealtimeHealthMonitor = () => {
-  console.log('🏥 Realtime health monitor started (automatic reconnection enabled)');
+  console.log('🏥 Realtime health monitor started (Supabase JS auto-reconnection enabled)');
   
-  // Very minimal monitoring - only check for actual errors every 10 minutes
-  // This matches the pattern of your previous bot with no reconnection spam
+  // Minimal monitoring - check every 10 minutes
   const checkInterval = 600000; // 10 minutes
   
   setInterval(() => {
     const status = getRealtimeStatus();
-    // Only log genuine errors, not normal connection states
-    if (status.status === 'errored') {
-      console.log('⚠️ Realtime connection error detected, Supabase will auto-recover');
+    if (status.status === 'disconnected') {
+      console.log('⚠️ Realtime subscription disconnected, attempting reconnection...');
+      reconnectRealtime();
     }
   }, checkInterval);
 }; 
