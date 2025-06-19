@@ -178,6 +178,7 @@ export const sendErrorNotification = async (error) => {
 const userStates = new Map();
 const scheduledJobs = new Map(); // Store scheduled reminders
 const groupMessages = new Map(); // Store group message IDs by callback ID for editing
+const userCommandMessages = new Map(); // Store user command message IDs for updating lists
 
 // Start collecting additional information from worker
 const startInfoCollection = async (userId, callbackId, userName) => {
@@ -339,6 +340,9 @@ export const handleCallbackQuery = async (callbackQuery) => {
         
         // Remove the button from the pending message
         newKeyboard = { inline_keyboard: [] };
+        
+        // Update user command messages (move from pending to schedule when completed)
+        await updateUserCommandMessages(userId, callbackId, 'scheduling');
         break;
         
       case 'complete':
@@ -352,6 +356,9 @@ export const handleCallbackQuery = async (callbackQuery) => {
         
         // Remove the complete button
         newKeyboard = { inline_keyboard: [] };
+        
+        // Update user command messages (remove from schedule, etc.)
+        await updateUserCommandMessages(userId, callbackId, 'completed');
         break;
         
       default:
@@ -366,8 +373,9 @@ export const handleCallbackQuery = async (callbackQuery) => {
     // Send response
     await bot.answerCallbackQuery(callbackQuery.id, { text: responseText });
     
-    // Update the original group message if it exists
-    await updateGroupMessage(callbackId, responseText, newKeyboard);
+    // Update the original group message if it exists (use short format for completed/scheduled)
+    const useShortFormat = action === 'complete' || (statusUpdate.status && (statusUpdate.status === 'completed' || statusUpdate.status === 'in_progress'));
+    await updateGroupMessage(callbackId, responseText, newKeyboard, useShortFormat);
     
   } catch (error) {
     console.error('❌ Error handling callback query:', error);
@@ -378,7 +386,7 @@ export const handleCallbackQuery = async (callbackQuery) => {
 };
 
 // Update the original group message with status changes
-const updateGroupMessage = async (callbackId, statusText, newKeyboard) => {
+const updateGroupMessage = async (callbackId, statusText, newKeyboard, useShortFormat = false) => {
   try {
     const messageData = groupMessages.get(callbackId);
     if (!messageData) {
@@ -394,9 +402,24 @@ const updateGroupMessage = async (callbackId, statusText, newKeyboard) => {
       return;
     }
 
-    // Regenerate the original message with current data
-    const originalMessage = messages.newCallback(callback);
-    const updatedMessage = originalMessage + `\n\n🔄 *Обновление:* ${statusText}`;
+    let updatedMessage;
+    
+    // Use short format for completed/scheduled status
+    if (useShortFormat || callback.status === 'completed' || callback.status === 'in_progress') {
+      updatedMessage = `
+🔔 *Заявка ${callback.status === 'completed' ? '✅ Выполнена' : callback.status === 'in_progress' ? '📅 Запланирована' : getStatusText(callback.status)}*
+
+👤 *${callback.name}* | 📞 ${callback.phone}
+🔧 ${callback.detailed_service_type || callback.service_type || 'Не указана'}
+👨‍🔧 ${callback.assigned_to || 'Не назначен'}
+
+🔄 *${statusText}*
+`;
+    } else {
+      // Full format for other statuses
+      const originalMessage = messages.newCallback(callback);
+      updatedMessage = originalMessage + `\n\n🔄 *Обновление:* ${statusText}`;
+    }
 
     await bot.editMessageText(updatedMessage, {
       chat_id: messageData.chatId,
@@ -602,9 +625,188 @@ ${collectedInfo.problemDescription ? `❓ *Проблема:* ${collectedInfo.pr
     };
 
     await sendDirectMessage(userId, detailedMessage, { reply_markup: scheduleKeyboard });
+    
+    // Update the group message to show info collection is complete
+    const infoCompleteText = `📋 Информация собрана (${userName}) - готово к планированию`;
+    await updateGroupMessage(callbackId, infoCompleteText, { inline_keyboard: [] });
+    
   } catch (error) {
     console.error('❌ Error sending detailed request:', error);
     await sendDirectMessage(userId, '❌ Ошибка при отправке детальной информации');
+  }
+};
+
+// Update user command messages (remove completed items, refresh lists)
+const updateUserCommandMessages = async (userId, callbackId, newStatus) => {
+  try {
+    const userMessages = userCommandMessages.get(userId);
+    if (!userMessages) return;
+
+    // Update /schedule command message if it exists
+    if (userMessages.schedule) {
+      const userSchedule = await getUserSchedule(userId);
+      await updateScheduleMessage(userId, userMessages.schedule.messageId, userMessages.schedule.chatId, userSchedule);
+    }
+
+    // Update /pending command message if it exists
+    if (userMessages.pending) {
+      const pendingClients = await getUserPendingClients(userId);
+      await updatePendingMessage(userId, userMessages.pending.messageId, userMessages.pending.chatId, pendingClients);
+    }
+  } catch (error) {
+    console.error('❌ Error updating user command messages:', error);
+  }
+};
+
+// Update schedule message
+const updateScheduleMessage = async (userId, messageId, chatId, userSchedule) => {
+  try {
+    if (userSchedule.length === 0) {
+      const noScheduleMessage = `
+📅 *Ваши запланированные визиты*
+
+📭 *У вас нет запланированных визитов*
+
+💡 *Чтобы запланировать визит:*
+1. Используйте команду /pending для просмотра готовых к планированию клиентов
+2. Нажмите кнопку "Запланировать визит"
+3. Укажите дату и время
+`;
+      
+      await bot.editMessageText(noScheduleMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+      });
+    } else {
+      let scheduleMessage = `📅 *Ваши запланированные визиты*\n\n`;
+      
+      userSchedule.forEach((callback, index) => {
+        scheduleMessage += `${index + 1}. 👤 *${callback.clientName}*\n`;
+        scheduleMessage += `   📞 ${callback.phone}\n`;
+        scheduleMessage += `   📍 ${callback.address}\n`;
+        
+        // Build service description
+        let serviceDescription = callback.detailedServiceType || 'Не указана';
+        if (callback.problemDescription) {
+          serviceDescription += `, ${callback.problemDescription}`;
+        }
+        scheduleMessage += `   🔧 ${serviceDescription}\n`;
+        
+        // Show appointment time and status
+        const timeUntil = callback.appointmentDate.getTime() - new Date().getTime();
+        const hoursUntil = Math.round(timeUntil / (1000 * 60 * 60));
+        
+        scheduleMessage += `   📅 ${callback.appointmentDate.toLocaleString('ru-RU')}\n`;
+        
+        if (hoursUntil > 0) {
+          scheduleMessage += `   ⏰ Через ${hoursUntil} ч.\n`;
+        } else if (hoursUntil > -24) {
+          scheduleMessage += `   🔴 Просрочено\n`;
+        } else {
+          scheduleMessage += `   🔴 Давно просрочено\n`;
+        }
+        
+        scheduleMessage += `\n`;
+      });
+      
+      scheduleMessage += `📋 *Всего запланировано:* ${userSchedule.length}`;
+      
+      // Create inline keyboard with completion buttons for each scheduled appointment
+      const keyboard = {
+        inline_keyboard: []
+      };
+      
+      userSchedule.forEach((callback, index) => {
+        keyboard.inline_keyboard.push([
+          {
+            text: `✅ Отметить как выполнено: ${callback.clientName}`,
+            callback_data: `complete_${callback.callbackId}`
+          }
+        ]);
+      });
+      
+      await bot.editMessageText(scheduleMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error updating schedule message:', error);
+  }
+};
+
+// Update pending message
+const updatePendingMessage = async (userId, messageId, chatId, pendingClients) => {
+  try {
+    if (pendingClients.length === 0) {
+      const noPendingMessage = `
+📋 *Клиенты готовые к планированию*
+
+📭 *У вас нет клиентов готовых к планированию*
+
+💡 *Клиенты появятся здесь после того как:*
+1. Вы нажмете "Связались" на заявке в группе
+2. Соберете всю необходимую информацию в личных сообщениях
+3. До того как запланируете визит
+
+📞 *Для получения новых заявок ожидайте уведомления в группе*
+`;
+      
+      await bot.editMessageText(noPendingMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+      });
+    } else {
+      let pendingMessage = `📋 *Клиенты готовые к планированию*\n\n`;
+      pendingMessage += `Информация собрана, выберите клиента для планирования визита:\n\n`;
+      
+      // Create inline keyboard with buttons for each pending client
+      const keyboard = {
+        inline_keyboard: []
+      };
+      
+      pendingClients.forEach((client, index) => {
+        // Add client info to message
+        pendingMessage += `${index + 1}. 👤 *${client.clientName}*\n`;
+        pendingMessage += `   📞 ${client.phone}\n`;
+        pendingMessage += `   📍 ${client.address}\n`;
+        
+        // Build service description
+        let serviceDescription = client.detailedServiceType;
+        if (client.problemDescription) {
+          serviceDescription += `, ${client.problemDescription}`;
+        }
+        pendingMessage += `   🔧 ${serviceDescription}\n`;
+        
+        // Show when contacted
+        const contactedTime = new Date(client.createdAt).toLocaleString('ru-RU');
+        pendingMessage += `   📞 Связались: ${contactedTime}\n`;
+        pendingMessage += `   ✅ Информация собрана, готов к планированию\n\n`;
+        
+        // Add button for this client
+        keyboard.inline_keyboard.push([
+          {
+            text: `📅 Запланировать визит к ${client.clientName}`,
+            callback_data: `schedule_pending_${client.callbackId}`
+          }
+        ]);
+      });
+      
+      pendingMessage += `📊 *Готовых к планированию:* ${pendingClients.length}`;
+      
+      await bot.editMessageText(pendingMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error updating pending message:', error);
   }
 };
 
@@ -782,7 +984,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
         
         // Update the original group message with scheduled status
         const scheduledStatusText = `📅 Визит запланирован на ${appointmentDate.toLocaleString('ru-RU')} (${userState.userName})`;
-        await updateGroupMessage(userState.callbackId, scheduledStatusText, { inline_keyboard: [] });
+        await updateGroupMessage(userState.callbackId, scheduledStatusText, { inline_keyboard: [] }, true);
       }
       
       // Clear user state
@@ -878,7 +1080,14 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 3. Укажите дату и время
 `;
       
-      await sendDirectMessage(chatId, noScheduleMessage);
+      const sentMessage = await sendDirectMessage(chatId, noScheduleMessage);
+      
+      // Store message ID for future updates
+      if (sentMessage && sentMessage.message_id) {
+        const userMessages = userCommandMessages.get(chatId) || {};
+        userMessages.schedule = { messageId: sentMessage.message_id, chatId: chatId };
+        userCommandMessages.set(chatId, userMessages);
+      }
     } else {
       let scheduleMessage = `📅 *Ваши запланированные визиты*\n\n`;
       
@@ -927,7 +1136,14 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
         ]);
       });
       
-      await sendDirectMessage(chatId, scheduleMessage, { reply_markup: keyboard });
+      const sentMessage = await sendDirectMessage(chatId, scheduleMessage, { reply_markup: keyboard });
+      
+      // Store message ID for future updates
+      if (sentMessage && sentMessage.message_id) {
+        const userMessages = userCommandMessages.get(chatId) || {};
+        userMessages.schedule = { messageId: sentMessage.message_id, chatId: chatId };
+        userCommandMessages.set(chatId, userMessages);
+      }
     }
   } else if (messageText === '/pending') {
     const pendingClients = await getUserPendingClients(chatId);
@@ -946,7 +1162,14 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 📞 *Для получения новых заявок ожидайте уведомления в группе*
 `;
       
-      await sendDirectMessage(chatId, noPendingMessage);
+      const sentMessage = await sendDirectMessage(chatId, noPendingMessage);
+      
+      // Store message ID for future updates
+      if (sentMessage && sentMessage.message_id) {
+        const userMessages = userCommandMessages.get(chatId) || {};
+        userMessages.pending = { messageId: sentMessage.message_id, chatId: chatId };
+        userCommandMessages.set(chatId, userMessages);
+      }
     } else {
       let pendingMessage = `📋 *Клиенты готовые к планированию*\n\n`;
       pendingMessage += `Информация собрана, выберите клиента для планирования визита:\n\n`;
@@ -985,7 +1208,14 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
       
       pendingMessage += `📊 *Готовых к планированию:* ${pendingClients.length}`;
       
-      await sendDirectMessage(chatId, pendingMessage, { reply_markup: keyboard });
+      const sentMessage = await sendDirectMessage(chatId, pendingMessage, { reply_markup: keyboard });
+      
+      // Store message ID for future updates
+      if (sentMessage && sentMessage.message_id) {
+        const userMessages = userCommandMessages.get(chatId) || {};
+        userMessages.pending = { messageId: sentMessage.message_id, chatId: chatId };
+        userCommandMessages.set(chatId, userMessages);
+      }
     }
   } else if (messageText === '/cancel' && userStates.has(chatId)) {
     userStates.delete(chatId);
