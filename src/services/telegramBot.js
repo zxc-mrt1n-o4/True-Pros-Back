@@ -137,23 +137,26 @@ export const notifyNewCallback = async (callbackData) => {
       [
         { text: '✅ Связались', callback_data: `contacted_${callbackData.id}` },
         { text: '❌ Отменить', callback_data: `cancel_${callbackData.id}` }
-      ],
-      [
-        { text: 'ℹ️ Подробнее', callback_data: `details_${callbackData.id}` }
       ]
     ]
   };
 
-  // Send to workers group
-  await sendToWorkersGroup(message, { reply_markup: keyboard });
+  // Send to workers group and store message ID for editing
+  const sentMessage = await sendToWorkersGroup(message, { reply_markup: keyboard });
+  if (sentMessage && sentMessage.message_id) {
+    groupMessages.set(callbackData.id, {
+      messageId: sentMessage.message_id,
+      chatId: sentMessage.chat.id
+    });
+  }
   
   return true;
 };
 
-// Send callback completion notification
+// Send callback completion notification (now handled by message editing)
 export const notifyCallbackCompleted = async (callbackData) => {
-  const message = messages.callbackCompleted(callbackData);
-  await sendToWorkersGroup(message);
+  // No longer send new messages for completion - handled by updateGroupMessage
+  console.log(`✅ Callback ${callbackData.id} completed, message updated via button press`);
   return true;
 };
 
@@ -174,6 +177,7 @@ export const sendErrorNotification = async (error) => {
 // Store user states for scheduling
 const userStates = new Map();
 const scheduledJobs = new Map(); // Store scheduled reminders
+const groupMessages = new Map(); // Store group message IDs by callback ID for editing
 
 // Start collecting additional information from worker
 const startInfoCollection = async (userId, callbackId, userName) => {
@@ -350,16 +354,6 @@ export const handleCallbackQuery = async (callbackQuery) => {
         newKeyboard = { inline_keyboard: [] };
         break;
         
-      case 'details':
-        // Show detailed information
-        const callback = await getCallbackById(callbackId);
-        if (callback) {
-          responseText = `📋 Детали заявки ${callbackId}:\n\n${messages.newCallback(callback)}`;
-        } else {
-          responseText = `❌ Заявка ${callbackId} не найдена`;
-        }
-        break;
-        
       default:
         responseText = '❌ Неизвестное действие';
     }
@@ -372,22 +366,48 @@ export const handleCallbackQuery = async (callbackQuery) => {
     // Send response
     await bot.answerCallbackQuery(callbackQuery.id, { text: responseText });
     
-    // Update message if status changed
-    if (action !== 'details') {
-      const updatedMessage = message.text + `\n\n🔄 *Обновление:* ${responseText}`;
-      await bot.editMessageText(updatedMessage, {
-        chat_id: message.chat.id,
-        message_id: message.message_id,
-        parse_mode: 'Markdown',
-        reply_markup: newKeyboard
-      });
-    }
+    // Update the original group message if it exists
+    await updateGroupMessage(callbackId, responseText, newKeyboard);
     
   } catch (error) {
     console.error('❌ Error handling callback query:', error);
     await bot.answerCallbackQuery(callbackQuery.id, { 
       text: '❌ Произошла ошибка при обработке запроса' 
     });
+  }
+};
+
+// Update the original group message with status changes
+const updateGroupMessage = async (callbackId, statusText, newKeyboard) => {
+  try {
+    const messageData = groupMessages.get(callbackId);
+    if (!messageData) {
+      console.log(`⚠️ No group message found for callback ${callbackId}`);
+      return;
+    }
+
+    const { getCallbackById } = await import('./callbackService.js');
+    const callback = await getCallbackById(callbackId);
+    
+    if (!callback) {
+      console.log(`⚠️ Callback ${callbackId} not found for message update`);
+      return;
+    }
+
+    // Regenerate the original message with current data
+    const originalMessage = messages.newCallback(callback);
+    const updatedMessage = originalMessage + `\n\n🔄 *Обновление:* ${statusText}`;
+
+    await bot.editMessageText(updatedMessage, {
+      chat_id: messageData.chatId,
+      message_id: messageData.messageId,
+      parse_mode: 'Markdown',
+      reply_markup: newKeyboard
+    });
+
+    console.log(`✅ Group message updated for callback ${callbackId}`);
+  } catch (error) {
+    console.error(`❌ Error updating group message for callback ${callbackId}:`, error.message);
   }
 };
 
@@ -760,17 +780,9 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
         
         await sendDirectMessage(chatId, confirmationMessage, { reply_markup: completeKeyboard });
         
-        // Notify the group about the scheduled appointment
-        const groupMessage = `
-📅 *Визит запланирован*
-
-🆔 *Заявка:* ${userState.callbackId}
-👤 *Клиент:* ${callback.name}
-📅 *Дата:* ${appointmentDate.toLocaleString('ru-RU')}
-👨‍🔧 *Мастер:* ${userState.userName}
-`;
-        
-        await sendToWorkersGroup(groupMessage);
+        // Update the original group message with scheduled status
+        const scheduledStatusText = `📅 Визит запланирован на ${appointmentDate.toLocaleString('ru-RU')} (${userState.userName})`;
+        await updateGroupMessage(userState.callbackId, scheduledStatusText, { inline_keyboard: [] });
       }
       
       // Clear user state
@@ -901,7 +913,21 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
       
       scheduleMessage += `📋 *Всего запланировано:* ${userSchedule.length}`;
       
-      await sendDirectMessage(chatId, scheduleMessage);
+      // Create inline keyboard with completion buttons for each scheduled appointment
+      const keyboard = {
+        inline_keyboard: []
+      };
+      
+      userSchedule.forEach((callback, index) => {
+        keyboard.inline_keyboard.push([
+          {
+            text: `✅ Отметить как выполнено: ${callback.clientName}`,
+            callback_data: `complete_${callback.callbackId}`
+          }
+        ]);
+      });
+      
+      await sendDirectMessage(chatId, scheduleMessage, { reply_markup: keyboard });
     }
   } else if (messageText === '/pending') {
     const pendingClients = await getUserPendingClients(chatId);
