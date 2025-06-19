@@ -8,21 +8,45 @@ export const initializeRealtime = () => {
   try {
     console.log('📡 Initializing Supabase realtime subscription...');
     
-    // Subscribe to changes in the callback_requests table
+    // Subscribe to changes in the callback_requests table using Supabase v2 syntax
     realtimeSubscription = supabase
-      .from('callback_requests')
-      .on('INSERT', (payload) => {
-        console.log('🆕 New callback request:', payload.new);
-        handleNewCallback(payload.new);
-      })
-      .on('UPDATE', (payload) => {
-        console.log('🔄 Updated callback request:', payload.new);
-        handleCallbackUpdate(payload.new, payload.old);
-      })
-      .on('DELETE', (payload) => {
-        console.log('🗑️ Deleted callback request:', payload.old);
-        handleCallbackDelete(payload.old);
-      })
+      .channel('callback_requests_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'callback_requests'
+        },
+        (payload) => {
+          console.log('🆕 New callback request:', payload.new);
+          handleNewCallback(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'callback_requests'
+        },
+        (payload) => {
+          console.log('🔄 Updated callback request:', payload.new);
+          handleCallbackUpdate(payload.new, payload.old);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'callback_requests'
+        },
+        (payload) => {
+          console.log('🗑️ Deleted callback request:', payload.old);
+          handleCallbackDelete(payload.old);
+        }
+      )
       .subscribe();
 
     console.log('✅ Successfully subscribed to callback_requests changes');
@@ -99,7 +123,7 @@ export const getRealtimeStatus = () => {
 export const disconnectRealtime = async () => {
   try {
     if (realtimeSubscription) {
-      await supabase.removeSubscription(realtimeSubscription);
+      await supabase.removeChannel(realtimeSubscription);
       realtimeSubscription = null;
       console.log('📡 Realtime subscription disconnected');
     }
