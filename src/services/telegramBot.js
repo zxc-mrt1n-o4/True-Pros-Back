@@ -588,7 +588,7 @@ ${collectedInfo.problemDescription ? `❓ *Проблема:* ${collectedInfo.pr
   }
 };
 
-// Get user's scheduled appointments (exclude completed)
+// Get user's scheduled appointments (only those with actual appointment dates)
 const getUserSchedule = async (userId) => {
   try {
     const { getAllCallbacks } = await import('./callbackService.js');
@@ -608,7 +608,7 @@ const getUserSchedule = async (userId) => {
       callback.status !== 'cancelled'
     );
     
-    // Also get scheduled jobs from memory for appointment times
+    // Get scheduled jobs from memory for appointment times
     const userScheduledJobs = [];
     for (const [key, job] of scheduledJobs.entries()) {
       if (key.includes(`_${userId}`)) {
@@ -616,30 +616,27 @@ const getUserSchedule = async (userId) => {
       }
     }
     
-    // Combine database info with scheduled appointment times
-    const combinedSchedule = userCallbacks.map(callback => {
-      const scheduledJob = userScheduledJobs.find(job => job.callbackId === callback.id);
-      return {
-        callbackId: callback.id,
-        clientName: callback.name,
-        phone: callback.phone,
-        address: callback.address,
-        detailedServiceType: callback.detailed_service_type,
-        problemDescription: callback.problem_description,
-        status: callback.status,
-        appointmentDate: scheduledJob ? scheduledJob.appointmentDate : null
-      };
-    });
+    // Only return callbacks that have scheduled appointments
+    const scheduledCallbacks = userCallbacks
+      .map(callback => {
+        const scheduledJob = userScheduledJobs.find(job => job.callbackId === callback.id);
+        if (!scheduledJob) return null; // Skip if no appointment scheduled
+        
+        return {
+          callbackId: callback.id,
+          clientName: callback.name,
+          phone: callback.phone,
+          address: callback.address,
+          detailedServiceType: callback.detailed_service_type,
+          problemDescription: callback.problem_description,
+          status: callback.status,
+          appointmentDate: scheduledJob.appointmentDate
+        };
+      })
+      .filter(callback => callback !== null) // Remove null entries
+      .sort((a, b) => a.appointmentDate - b.appointmentDate); // Sort by appointment time
     
-    // Sort by appointment date (scheduled first, then by creation date)
-    return combinedSchedule.sort((a, b) => {
-      if (a.appointmentDate && b.appointmentDate) {
-        return a.appointmentDate - b.appointmentDate;
-      }
-      if (a.appointmentDate && !b.appointmentDate) return -1;
-      if (!a.appointmentDate && b.appointmentDate) return 1;
-      return 0;
-    });
+    return scheduledCallbacks;
     
   } catch (error) {
     console.error('❌ Error getting user schedule:', error);
@@ -799,7 +796,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 /start - Показать это сообщение
 /help - Помощь
 /status - Статус системы
-/pending - Клиенты ожидающие планирования
+/pending - Клиенты готовые к планированию
 
 🌐 *Наш сайт:* [True Pros](http://localhost:3000)
 
@@ -826,7 +823,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 /help - Эта справка
 /status - Проверить статус системы
 /schedule - Посмотреть запланированные визиты
-/pending - Клиенты ожидающие планирования
+/pending - Клиенты готовые к планированию
 /cancel - Отменить текущее действие
 
 🔧 *Для работников:*
@@ -859,64 +856,50 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
     
     if (userSchedule.length === 0) {
       const noScheduleMessage = `
-📅 *Ваши активные заявки*
+📅 *Ваши запланированные визиты*
 
-📭 *У вас нет активных заявок*
+📭 *У вас нет запланированных визитов*
 
-💡 *Чтобы получить заявку:*
-1. Нажмите "Связались" на заявке в группе
-2. Соберите информацию в личных сообщениях
-3. Запланируйте визит
+💡 *Чтобы запланировать визит:*
+1. Используйте команду /pending для просмотра готовых к планированию клиентов
+2. Нажмите кнопку "Запланировать визит"
+3. Укажите дату и время
 `;
       
       await sendDirectMessage(chatId, noScheduleMessage);
     } else {
-      let scheduleMessage = `📅 *Ваши активные заявки*\n\n`;
+      let scheduleMessage = `📅 *Ваши запланированные визиты*\n\n`;
       
       userSchedule.forEach((callback, index) => {
         scheduleMessage += `${index + 1}. 👤 *${callback.clientName}*\n`;
         scheduleMessage += `   📞 ${callback.phone}\n`;
-        
-        if (callback.address) {
-          scheduleMessage += `   📍 ${callback.address}\n`;
-        }
+        scheduleMessage += `   📍 ${callback.address}\n`;
         
         // Build service description
-        let serviceDescription = '';
-        if (callback.detailedServiceType) {
-          serviceDescription = callback.detailedServiceType;
-          if (callback.problemDescription) {
-            serviceDescription += `, ${callback.problemDescription}`;
-          }
-        } else {
-          serviceDescription = 'Не указана';
+        let serviceDescription = callback.detailedServiceType || 'Не указана';
+        if (callback.problemDescription) {
+          serviceDescription += `, ${callback.problemDescription}`;
         }
         scheduleMessage += `   🔧 ${serviceDescription}\n`;
         
-        // Show appointment time if scheduled
-        if (callback.appointmentDate) {
-          const timeUntil = callback.appointmentDate.getTime() - new Date().getTime();
-          const hoursUntil = Math.round(timeUntil / (1000 * 60 * 60));
-          
-          scheduleMessage += `   📅 ${callback.appointmentDate.toLocaleString('ru-RU')}\n`;
-          
-          if (hoursUntil > 0) {
-            scheduleMessage += `   ⏰ Через ${hoursUntil} ч.\n`;
-          } else if (hoursUntil > -24) {
-            scheduleMessage += `   🔴 Просрочено\n`;
-          } else {
-            scheduleMessage += `   🔴 Давно просрочено\n`;
-          }
+        // Show appointment time and status
+        const timeUntil = callback.appointmentDate.getTime() - new Date().getTime();
+        const hoursUntil = Math.round(timeUntil / (1000 * 60 * 60));
+        
+        scheduleMessage += `   📅 ${callback.appointmentDate.toLocaleString('ru-RU')}\n`;
+        
+        if (hoursUntil > 0) {
+          scheduleMessage += `   ⏰ Через ${hoursUntil} ч.\n`;
+        } else if (hoursUntil > -24) {
+          scheduleMessage += `   🔴 Просрочено\n`;
         } else {
-          // Show status for non-scheduled items
-          const statusText = callback.status === 'contacted' ? '📋 Информация собрана' : '🔄 В работе';
-          scheduleMessage += `   ${statusText}\n`;
+          scheduleMessage += `   🔴 Давно просрочено\n`;
         }
         
         scheduleMessage += `\n`;
       });
       
-      scheduleMessage += `📋 *Всего активных:* ${userSchedule.length}`;
+      scheduleMessage += `📋 *Всего запланировано:* ${userSchedule.length}`;
       
       await sendDirectMessage(chatId, scheduleMessage);
     }
@@ -925,22 +908,22 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
     
     if (pendingClients.length === 0) {
       const noPendingMessage = `
-📋 *Клиенты ожидающие планирования*
+📋 *Клиенты готовые к планированию*
 
-📭 *У вас нет клиентов ожидающих планирования*
+📭 *У вас нет клиентов готовых к планированию*
 
 💡 *Клиенты появятся здесь после того как:*
 1. Вы нажмете "Связались" на заявке в группе
-2. Соберете информацию в личных сообщениях
+2. Соберете всю необходимую информацию в личных сообщениях
 3. До того как запланируете визит
 
-📅 *Для планирования используйте команду /schedule*
+📞 *Для получения новых заявок ожидайте уведомления в группе*
 `;
       
       await sendDirectMessage(chatId, noPendingMessage);
     } else {
-      let pendingMessage = `📋 *Клиенты ожидающие планирования*\n\n`;
-      pendingMessage += `Выберите клиента для планирования визита:\n\n`;
+      let pendingMessage = `📋 *Клиенты готовые к планированию*\n\n`;
+      pendingMessage += `Информация собрана, выберите клиента для планирования визита:\n\n`;
       
       // Create inline keyboard with buttons for each pending client
       const keyboard = {
@@ -962,7 +945,8 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
         
         // Show when contacted
         const contactedTime = new Date(client.createdAt).toLocaleString('ru-RU');
-        pendingMessage += `   📞 Связались: ${contactedTime}\n\n`;
+        pendingMessage += `   📞 Связались: ${contactedTime}\n`;
+        pendingMessage += `   ✅ Информация собрана, готов к планированию\n\n`;
         
         // Add button for this client
         keyboard.inline_keyboard.push([
@@ -973,7 +957,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
         ]);
       });
       
-      pendingMessage += `📊 *Всего ожидают:* ${pendingClients.length}`;
+      pendingMessage += `📊 *Готовых к планированию:* ${pendingClients.length}`;
       
       await sendDirectMessage(chatId, pendingMessage, { reply_markup: keyboard });
     }
@@ -1028,7 +1012,7 @@ export const setBotCommands = async () => {
       { command: 'help', description: 'Помощь и список команд' },
       { command: 'status', description: 'Проверить статус системы' },
       { command: 'schedule', description: 'Посмотреть запланированные визиты' },
-      { command: 'pending', description: 'Клиенты ожидающие планирования' },
+      { command: 'pending', description: 'Клиенты готовые к планированию' },
       { command: 'cancel', description: 'Отменить текущее действие' }
     ];
 
