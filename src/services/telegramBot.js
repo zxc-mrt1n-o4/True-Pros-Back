@@ -109,52 +109,22 @@ export const sendDirectMessage = async (chatId, message, options = {}) => {
   }
 };
 
-// Send or edit message for cleaner chat
-const sendOrEditMessage = async (chatId, message, options = {}, messageType = 'default') => {
+// Simple edit message for info collection only
+const editInfoMessage = async (chatId, message, messageId) => {
   try {
-    const sendOptions = {
+    const result = await bot.editMessageText(message, {
+      chat_id: chatId,
+      message_id: messageId,
       parse_mode: 'Markdown',
-      disable_web_page_preview: true,
-      ...options
-    };
-
-    const userKey = `${chatId}_${messageType}`;
-    const lastMessageId = userMessages.get(userKey);
-
-    if (lastMessageId) {
-      // Try to edit existing message
-      try {
-        const result = await bot.editMessageText(message, {
-          chat_id: chatId,
-          message_id: lastMessageId,
-          ...sendOptions
-        });
-        console.log(`✅ Message edited for ${chatId} (type: ${messageType})`);
-        return result;
-      } catch (editError) {
-        // If edit fails, send new message
-        console.log(`⚠️ Edit failed, sending new message: ${editError.message}`);
-      }
-    }
-
-    // Send new message
-    const result = await bot.sendMessage(chatId, message, sendOptions);
-    
-    // Store message ID for future edits
-    userMessages.set(userKey, result.message_id);
-    
-    console.log(`✅ New message sent to ${chatId} (type: ${messageType})`);
+      disable_web_page_preview: true
+    });
+    console.log(`✅ Info message edited for ${chatId}`);
     return result;
   } catch (error) {
-    console.error(`❌ Failed to send/edit message to ${chatId}:`, error.message);
-    return null;
+    console.log(`⚠️ Edit failed, sending new message: ${error.message}`);
+    // If edit fails, send new message
+    return await sendDirectMessage(chatId, message);
   }
-};
-
-// Clear stored message ID for a specific type
-const clearMessageId = (chatId, messageType) => {
-  const userKey = `${chatId}_${messageType}`;
-  userMessages.delete(userKey);
 };
 
 // Send new callback notification
@@ -204,7 +174,6 @@ export const sendErrorNotification = async (error) => {
 // Store user states for scheduling
 const userStates = new Map();
 const scheduledJobs = new Map(); // Store scheduled reminders
-const userMessages = new Map(); // Store last message IDs for editing
 
 // Start collecting additional information from worker
 const startInfoCollection = async (userId, callbackId, userName) => {
@@ -230,15 +199,17 @@ const startInfoCollection = async (userId, callbackId, userName) => {
 *Отправьте адрес клиента:*
 `;
 
+    // Send initial message and store its ID for editing
+    const sentMessage = await sendDirectMessage(userId, infoMessage);
+    
     // Set user state for info collection
     userStates.set(userId, {
       action: 'collecting_address',
       callbackId: callbackId,
       userName: userName,
-      collectedInfo: {}
+      collectedInfo: {},
+      infoMessageId: sentMessage ? sentMessage.message_id : null
     });
-
-    await sendOrEditMessage(userId, infoMessage, {}, 'info_collection');
   } catch (error) {
     console.error('❌ Error starting info collection:', error);
     await sendDirectMessage(userId, '❌ Ошибка при начале сбора информации');
@@ -290,7 +261,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
       userName: userName
     });
 
-    await sendOrEditMessage(userId, schedulingMessage, {}, 'scheduling');
+    await sendDirectMessage(userId, schedulingMessage);
   } catch (error) {
     console.error('❌ Error sending scheduling request:', error);
     await sendDirectMessage(userId, '❌ Ошибка при отправке запроса на планирование');
@@ -339,8 +310,6 @@ export const handleCallbackQuery = async (callbackQuery) => {
         // Remove all buttons from group message - worker will handle in DM
         newKeyboard = { inline_keyboard: [] };
         break;
-        
-
         
       case 'cancel':
         statusUpdate = { 
@@ -496,7 +465,7 @@ const handleInfoCollection = async (chatId, messageText, userState) => {
       return;
     }
 
-    const { action, callbackId, userName, collectedInfo } = userState;
+    const { action, callbackId, userName, collectedInfo, infoMessageId } = userState;
 
     switch (action) {
       case 'collecting_address':
@@ -504,12 +473,18 @@ const handleInfoCollection = async (chatId, messageText, userState) => {
         userState.action = 'collecting_service_type';
         userStates.set(chatId, userState);
         
-        await sendOrEditMessage(chatId, `
+        const serviceMessage = `
 📍 *Адрес сохранен:* ${messageText.trim()}
 
 🔧 *Теперь уточните тип услуги:*
 (например: "Ремонт холодильника", "Замена компрессора", "Диагностика стиральной машины")
-`, {}, 'info_collection');
+`;
+        
+        if (infoMessageId) {
+          await editInfoMessage(chatId, serviceMessage, infoMessageId);
+        } else {
+          await sendDirectMessage(chatId, serviceMessage);
+        }
         break;
 
       case 'collecting_service_type':
@@ -517,12 +492,18 @@ const handleInfoCollection = async (chatId, messageText, userState) => {
         userState.action = 'collecting_problem';
         userStates.set(chatId, userState);
         
-        await sendOrEditMessage(chatId, `
+        const problemMessage = `
 🔧 *Тип услуги сохранен:* ${messageText.trim()}
 
 ❓ *Опишите проблему (необязательно):*
 Или отправьте "-" чтобы пропустить
-`, {}, 'info_collection');
+`;
+        
+        if (infoMessageId) {
+          await editInfoMessage(chatId, problemMessage, infoMessageId);
+        } else {
+          await sendDirectMessage(chatId, problemMessage);
+        }
         break;
 
       case 'collecting_problem':
@@ -600,7 +581,7 @@ ${collectedInfo.problemDescription ? `❓ *Проблема:* ${collectedInfo.pr
       ]
     };
 
-    await sendOrEditMessage(userId, detailedMessage, { reply_markup: scheduleKeyboard }, 'detailed_request');
+    await sendDirectMessage(userId, detailedMessage, { reply_markup: scheduleKeyboard });
   } catch (error) {
     console.error('❌ Error sending detailed request:', error);
     await sendDirectMessage(userId, '❌ Ошибка при отправке детальной информации');
@@ -830,7 +811,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 💼 *Для работников:* Добавьте этого бота в рабочую группу для получения уведомлений о новых заявках.
 `;
 
-    await sendOrEditMessage(chatId, welcomeMessage, {}, 'start');
+    await sendDirectMessage(chatId, welcomeMessage);
   } else if (messageText === '/help') {
     const helpMessage = `
 ℹ️ *Помощь - True Pros Bot*
@@ -857,7 +838,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 📞 *Поддержка:* Если есть вопросы, обратитесь к администратору.
 `;
 
-    await sendOrEditMessage(chatId, helpMessage, {}, 'help');
+    await sendDirectMessage(chatId, helpMessage);
   } else if (messageText === '/status') {
     const statusMessage = `
 📊 *Статус системы True Pros*
@@ -872,7 +853,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 💚 Все системы работают нормально!
 `;
 
-    await sendOrEditMessage(chatId, statusMessage, {}, 'status');
+    await sendDirectMessage(chatId, statusMessage);
   } else if (messageText === '/schedule') {
     const userSchedule = await getUserSchedule(chatId);
     
@@ -888,7 +869,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 3. Запланируйте визит
 `;
       
-      await sendOrEditMessage(chatId, noScheduleMessage, {}, 'schedule');
+      await sendDirectMessage(chatId, noScheduleMessage);
     } else {
       let scheduleMessage = `📅 *Ваши активные заявки*\n\n`;
       
@@ -937,7 +918,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
       
       scheduleMessage += `📋 *Всего активных:* ${userSchedule.length}`;
       
-      await sendOrEditMessage(chatId, scheduleMessage, {}, 'schedule');
+      await sendDirectMessage(chatId, scheduleMessage);
     }
   } else if (messageText === '/pending') {
     const pendingClients = await getUserPendingClients(chatId);
@@ -956,7 +937,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 📅 *Для планирования используйте команду /schedule*
 `;
       
-      await sendOrEditMessage(chatId, noPendingMessage, {}, 'pending');
+      await sendDirectMessage(chatId, noPendingMessage);
     } else {
       let pendingMessage = `📋 *Клиенты ожидающие планирования*\n\n`;
       pendingMessage += `Выберите клиента для планирования визита:\n\n`;
@@ -994,7 +975,7 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
       
       pendingMessage += `📊 *Всего ожидают:* ${pendingClients.length}`;
       
-      await sendOrEditMessage(chatId, pendingMessage, { reply_markup: keyboard }, 'pending');
+      await sendDirectMessage(chatId, pendingMessage, { reply_markup: keyboard });
     }
   } else if (messageText === '/cancel' && userStates.has(chatId)) {
     userStates.delete(chatId);
