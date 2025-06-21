@@ -14,7 +14,7 @@ import { testSupabaseConnection } from './config/supabase.js';
 console.log('🤖 Loading Telegram bot...');
 import { testBotConnection, setupTelegramWebhook } from './services/telegramBot.js';
 console.log('📡 Loading realtime service...');
-import { initializeRealtime, startRealtimeHealthMonitor } from './services/realtimeService.js';
+import { initializeRealtime, startRealtimeHealthMonitor, getRealtimeStatus, reconnectRealtime, testRealtimeConnection } from './services/realtimeService.js';
 
 // Import routes
 console.log('🛣️ Loading routes...');
@@ -75,12 +75,77 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const realtimeStatus = getRealtimeStatus();
+  
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    realtime: realtimeStatus
   });
+});
+
+// Realtime status endpoint
+app.get('/api/realtime/status', (req, res) => {
+  try {
+    const status = getRealtimeStatus();
+    res.json({
+      success: true,
+      data: status,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Realtime reconnect endpoint
+app.post('/api/realtime/reconnect', async (req, res) => {
+  try {
+    console.log('🔄 Manual reconnect requested via API');
+    const result = await reconnectRealtime();
+    
+    res.json({
+      success: true,
+      message: 'Reconnection initiated',
+      result: result ? 'success' : 'failed',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ API reconnect error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Realtime test endpoint
+app.post('/api/realtime/test', async (req, res) => {
+  try {
+    console.log('🧪 Realtime test requested via API');
+    const isHealthy = await testRealtimeConnection();
+    
+    res.json({
+      success: true,
+      healthy: isHealthy,
+      status: getRealtimeStatus(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ API test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // API routes

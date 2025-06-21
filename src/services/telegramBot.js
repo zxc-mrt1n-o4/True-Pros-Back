@@ -323,6 +323,9 @@ export const handleCallbackQuery = async (callbackQuery) => {
         };
         responseText = `❌ Заявка отменена (${userName})`;
         
+        // Cancel any scheduled reminder for this callback
+        cancelScheduledReminder(userId, callbackId);
+        
         // Remove all buttons when cancelled
         newKeyboard = { inline_keyboard: [] };
         break;
@@ -353,6 +356,9 @@ export const handleCallbackQuery = async (callbackQuery) => {
           completed_by: userName
         };
         responseText = `✅ Заявка выполнена (${userName})`;
+        
+        // Cancel any scheduled reminder for this callback
+        cancelScheduledReminder(userId, callbackId);
         
         // Remove the complete button
         newKeyboard = { inline_keyboard: [] };
@@ -472,7 +478,19 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
   const timeoutMs = reminderTime.getTime() - now.getTime();
   
   const timeoutId = setTimeout(async () => {
-    const reminderMessage = `
+    // Check if the callback is still active before sending reminder
+    try {
+      const { getCallbackById } = await import('./callbackService.js');
+      const callback = await getCallbackById(callbackId);
+      
+      // Only send reminder if callback exists and is not completed or cancelled
+      if (!callback || callback.status === 'completed' || callback.status === 'cancelled') {
+        console.log(`⏰ Skipping reminder for callback ${callbackId} - status: ${callback?.status || 'not found'}`);
+        scheduledJobs.delete(`${callbackId}_${userId}`);
+        return;
+      }
+      
+      const reminderMessage = `
 ⏰ *Напоминание о визите*
 
 🕐 *Через 45 минут:* ${appointmentDate.toLocaleString('ru-RU')}
@@ -482,8 +500,13 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
 
 📍 *Не забудьте подготовиться к визиту!*
 `;
+      
+      await sendDirectMessage(userId, reminderMessage);
+      console.log(`⏰ Reminder sent for callback ${callbackId}`);
+    } catch (error) {
+      console.error(`❌ Error sending reminder for callback ${callbackId}:`, error);
+    }
     
-    await sendDirectMessage(userId, reminderMessage);
     scheduledJobs.delete(`${callbackId}_${userId}`);
   }, timeoutMs);
   
@@ -497,6 +520,22 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
   });
   
   console.log(`⏰ Reminder scheduled for ${reminderTime.toLocaleString('ru-RU')}`);
+};
+
+// Cancel scheduled reminder for a specific callback
+const cancelScheduledReminder = (userId, callbackId) => {
+  const jobKey = `${callbackId}_${userId}`;
+  const scheduledJob = scheduledJobs.get(jobKey);
+  
+  if (scheduledJob) {
+    clearTimeout(scheduledJob.timeoutId);
+    scheduledJobs.delete(jobKey);
+    console.log(`⏰ Cancelled reminder for callback ${callbackId}`);
+    return true;
+  }
+  
+  console.log(`⏰ No reminder found to cancel for callback ${callbackId}`);
+  return false;
 };
 
 // Handle info collection process

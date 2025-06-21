@@ -2,13 +2,21 @@ import { supabase } from '../config/supabase.js';
 import { notifyNewCallback, notifyCallbackCompleted, sendErrorNotification } from './telegramBot.js';
 
 let realtimeSubscription = null;
+let lastActivity = null;
 
-// Initialize realtime subscription using new Supabase JS implementation
+// Initialize realtime subscription using Supabase's built-in reconnection
 export const initializeRealtime = () => {
   try {
     console.log('📡 Initializing Supabase realtime subscription...');
     
-    // Subscribe to changes in the callback_requests table using Supabase v2 syntax
+    // Unsubscribe existing subscription if any
+    if (realtimeSubscription) {
+      console.log('🔌 Unsubscribing existing subscription...');
+      realtimeSubscription.unsubscribe();
+      realtimeSubscription = null;
+    }
+    
+    // Create subscription using the correct Supabase v2 pattern
     realtimeSubscription = supabase
       .channel('callback_requests_changes')
       .on(
@@ -20,6 +28,7 @@ export const initializeRealtime = () => {
         },
         (payload) => {
           console.log('🆕 New callback request:', payload.new);
+          lastActivity = new Date();
           handleNewCallback(payload.new);
         }
       )
@@ -32,6 +41,7 @@ export const initializeRealtime = () => {
         },
         (payload) => {
           console.log('🔄 Updated callback request:', payload.new);
+          lastActivity = new Date();
           handleCallbackUpdate(payload.new, payload.old);
         }
       )
@@ -44,16 +54,31 @@ export const initializeRealtime = () => {
         },
         (payload) => {
           console.log('🗑️ Deleted callback request:', payload.old);
+          lastActivity = new Date();
           handleCallbackDelete(payload.old);
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        console.log(`📡 Realtime subscription status: ${status}`);
+        
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to callback_requests changes');
+          lastActivity = new Date();
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Realtime channel error:', err);
+          sendErrorNotification(`Realtime channel error: ${err?.message || err}`).catch(console.error);
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏰ Realtime connection timed out');
+        } else if (status === 'CLOSED') {
+          console.warn('🔌 Realtime connection closed');
+        }
+      });
 
-    console.log('✅ Successfully subscribed to callback_requests changes');
+    console.log('✅ Realtime subscription initialized (Supabase handles reconnection automatically)');
     return realtimeSubscription;
   } catch (error) {
     console.error('❌ Error initializing realtime:', error);
-    sendErrorNotification(`Critical realtime error: ${error.message}`);
+    sendErrorNotification(`Critical realtime error: ${error.message}`).catch(console.error);
     return null;
   }
 };
@@ -109,13 +134,16 @@ const handleCallbackDelete = async (deletedRecord) => {
 
 // Get realtime connection status
 export const getRealtimeStatus = () => {
-  if (!realtimeSubscription) {
-    return { status: 'disconnected', subscription: null };
-  }
+  const now = new Date();
+  const timeSinceActivity = lastActivity ? now - lastActivity : null;
   
   return {
-    status: 'subscribed',
-    subscription: realtimeSubscription
+    status: realtimeSubscription ? 'connected' : 'disconnected',
+    subscription: realtimeSubscription ? 'active' : 'none',
+    lastActivity: lastActivity ? lastActivity.toISOString() : null,
+    timeSinceActivity: timeSinceActivity ? `${Math.round(timeSinceActivity / 1000)}s` : null,
+    isHealthy: realtimeSubscription ? true : false,
+    note: 'Supabase JS handles reconnection automatically'
   };
 };
 
@@ -127,6 +155,8 @@ export const disconnectRealtime = async () => {
       realtimeSubscription = null;
       console.log('📡 Realtime subscription disconnected');
     }
+    
+    lastActivity = null;
   } catch (error) {
     console.error('❌ Error disconnecting realtime:', error);
   }
@@ -136,8 +166,10 @@ export const disconnectRealtime = async () => {
 export const reconnectRealtime = async () => {
   try {
     console.log('🔄 Manual reconnection requested...');
+    
     await disconnectRealtime();
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     return initializeRealtime();
   } catch (error) {
     console.error('❌ Error in manual reconnection:', error);
@@ -145,18 +177,38 @@ export const reconnectRealtime = async () => {
   }
 };
 
-// Simplified health monitoring
+// Simple health monitoring (optional - Supabase handles reconnection)
 export const startRealtimeHealthMonitor = () => {
-  console.log('🏥 Realtime health monitor started (Supabase JS auto-reconnection enabled)');
+  console.log('🏥 Realtime health monitor started (minimal - Supabase handles reconnection)');
   
-  // Minimal monitoring - check every 10 minutes
-  const checkInterval = 600000; // 10 minutes
-  
+  // Optional: Simple status logging every 10 minutes
   setInterval(() => {
     const status = getRealtimeStatus();
+    console.log(`💚 Realtime status: ${status.status} (${status.note})`);
+  }, 600000); // 10 minutes
+};
+
+// Test realtime connection
+export const testRealtimeConnection = async () => {
+  try {
+    console.log('🧪 Testing realtime connection...');
+    
+    const status = getRealtimeStatus();
+    console.log('📊 Current status:', status);
+    
     if (status.status === 'disconnected') {
-      console.log('⚠️ Realtime subscription disconnected, attempting reconnection...');
-      reconnectRealtime();
+      console.log('❌ Realtime is disconnected');
+      return false;
     }
-  }, checkInterval);
+    
+    if (realtimeSubscription) {
+      console.log('✅ Realtime connection appears healthy');
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('❌ Error testing realtime connection:', error);
+    return false;
+  }
 }; 
