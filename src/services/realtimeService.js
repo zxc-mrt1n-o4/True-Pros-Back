@@ -112,27 +112,46 @@ export const initializeRealtime = async () => {
           
           const errorMessage = err?.message || JSON.stringify(err) || 'Unknown channel error';
           
-          // Check for specific database connection errors
+          // Check for specific database connection errors (critical)
           if (errorMessage.includes('unable to connect to the project database')) {
             console.error('🔍 Database connection error detected');
             await sendErrorNotification(`🚨 CRITICAL: Supabase realtime cannot connect to database. Error: ${errorMessage}`);
-            
-            // Attempt to reconnect with delay
             scheduleReconnection();
-          } else {
-            await sendErrorNotification(`Realtime channel error: ${errorMessage}`);
+          } 
+          // Check for authentication/permission errors (critical)
+          else if (errorMessage.includes('permission') || errorMessage.includes('unauthorized') || errorMessage.includes('forbidden')) {
+            console.error('🔍 Authentication/permission error detected');
+            await sendErrorNotification(`🚨 CRITICAL: Realtime permission error: ${errorMessage}`);
+            scheduleReconnection();
+          }
+          // All other errors are likely temporary - log but don't spam notifications
+          else {
+            console.warn(`⚠️ Temporary realtime error (will auto-recover): ${errorMessage}`);
+            
+            // Only notify if this is a repeated failure (3+ attempts)
+            if (connectionAttempts >= 2) {
+              await sendErrorNotification(`⚠️ Realtime experiencing repeated connection issues (attempt ${connectionAttempts + 1}): ${errorMessage}`);
+            }
+            
             scheduleReconnection();
           }
           
         } else if (status === 'TIMED_OUT') {
           console.error('⏰ Realtime connection timed out');
           isInitializing = false;
-          await sendErrorNotification('⏰ Realtime connection timed out');
+          
+          // Only notify for timeouts if it's a repeated issue
+          if (connectionAttempts >= 1) {
+            await sendErrorNotification(`⏰ Realtime connection timeout (attempt ${connectionAttempts + 1})`);
+          }
+          
           scheduleReconnection();
           
         } else if (status === 'CLOSED') {
-          console.warn('🔌 Realtime connection closed');
+          console.warn('🔌 Realtime connection closed (will auto-reconnect)');
           isInitializing = false;
+          
+          // Don't notify for normal connection closures - they're expected
           scheduleReconnection();
           
         } else {
@@ -174,7 +193,12 @@ const scheduleReconnection = () => {
   
   retryTimeout = setTimeout(async () => {
     console.log(`🔄 Reconnection attempt ${connectionAttempts}/${maxRetries}`);
-    await initializeRealtime();
+    const result = await initializeRealtime();
+    
+    // If reconnection was successful, log recovery
+    if (result && connectionAttempts > 1) {
+      console.log(`✅ Realtime connection recovered after ${connectionAttempts} attempts`);
+    }
   }, delay);
 };
 
