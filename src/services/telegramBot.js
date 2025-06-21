@@ -490,7 +490,7 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
         return;
       }
       
-      const reminderMessage = `
+    const reminderMessage = `
 ⏰ *Напоминание о визите*
 
 🕐 *Через 45 минут:* ${appointmentDate.toLocaleString('ru-RU')}
@@ -500,8 +500,8 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
 
 📍 *Не забудьте подготовиться к визиту!*
 `;
-      
-      await sendDirectMessage(userId, reminderMessage);
+    
+    await sendDirectMessage(userId, reminderMessage);
       console.log(`⏰ Reminder sent for callback ${callbackId}`);
     } catch (error) {
       console.error(`❌ Error sending reminder for callback ${callbackId}:`, error);

@@ -9,7 +9,9 @@
     "dev": "node --watch src/index.js",
     "build": "echo 'No build step required for Node.js'",
     "test": "echo 'No tests specified'",
-    "setup": "node setup.js"
+    "setup": "node setup.js",
+    "test:realtime": "node test-supabase-realtime.js",
+    "diagnose": "node test-supabase-realtime.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.50.0",

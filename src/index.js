@@ -243,13 +243,12 @@ const startServer = async () => {
     
     // Initialize realtime subscriptions
     console.log('📡 Initializing realtime subscriptions...');
-    const realtimeChannel = initializeRealtime();
+    const realtimeChannel = await initializeRealtime();
     
     if (realtimeChannel) {
-      // Start minimal health monitoring (Supabase handles reconnections automatically)
-      startRealtimeHealthMonitor();
+      console.log('✅ Realtime subscriptions active');
     } else {
-      console.warn('⚠️ Realtime initialization failed. Manual polling may be required.');
+      console.warn('⚠️ Realtime initialization failed. Will attempt automatic reconnection.');
     }
     
     // Start server
