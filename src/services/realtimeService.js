@@ -3,7 +3,7 @@ import { notifyNewCallback, notifyCallbackCompleted } from './telegramBot.js';
 
 let realtimeSubscription = null;
 
-// Simple realtime initialization - let Supabase handle everything
+// Simple realtime initialization using modern Supabase v2 API
 export const initializeRealtime = async () => {
   try {
     console.log('📡 Starting simple realtime subscription...');
@@ -13,17 +13,33 @@ export const initializeRealtime = async () => {
       await disconnectRealtime();
     }
 
-    // Create simple subscription
+    // Create simple subscription using modern channel API
     realtimeSubscription = supabase
-      .from('callback_requests')
-      .on('INSERT', (payload) => {
-        console.log('🆕 New callback request received');
-        handleNewCallback(payload.new);
-      })
-      .on('UPDATE', (payload) => {
-        console.log('🔄 Callback request updated');
-        handleCallbackUpdate(payload.new, payload.old);
-      })
+      .channel('callback_requests')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'callback_requests'
+        },
+        (payload) => {
+          console.log('🆕 New callback request received');
+          handleNewCallback(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public', 
+          table: 'callback_requests'
+        },
+        (payload) => {
+          console.log('🔄 Callback request updated');
+          handleCallbackUpdate(payload.new, payload.old);
+        }
+      )
       .subscribe((status) => {
         console.log(`📡 Realtime status: ${status}`);
       });
@@ -69,7 +85,7 @@ export const getRealtimeStatus = () => {
 // Clean disconnect
 export const disconnectRealtime = async () => {
   if (realtimeSubscription) {
-    await supabase.removeChannel(realtimeSubscription); // Use removeChannel or unsubscribe based on your version
+    await supabase.removeChannel(realtimeSubscription);
     realtimeSubscription = null;
     console.log('🔌 Realtime disconnected');
   }
