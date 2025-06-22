@@ -144,10 +144,7 @@ export const notifyNewCallback = async (callbackData) => {
   // Send to workers group and store message ID for editing
   const sentMessage = await sendToWorkersGroup(message, { reply_markup: keyboard });
   if (sentMessage && sentMessage.message_id) {
-    groupMessages.set(callbackData.id, {
-      messageId: sentMessage.message_id,
-      chatId: sentMessage.chat.id
-    });
+    await storeGroupMessage(callbackData.id, sentMessage.message_id, sentMessage.chat.id);
   }
   
   return true;
@@ -179,6 +176,53 @@ const userStates = new Map();
 const scheduledJobs = new Map(); // Store scheduled reminders
 const groupMessages = new Map(); // Store group message IDs by callback ID for editing
 const userCommandMessages = new Map(); // Store user command message IDs for updating lists
+
+// Enhanced group message storage with database fallback
+const storeGroupMessage = async (callbackId, messageId, chatId) => {
+  try {
+    groupMessages.set(callbackId, { messageId, chatId });
+    
+    // Also store in database for persistence
+    const { updateCallbackStatus } = await import('./callbackService.js');
+    await updateCallbackStatus(callbackId, {
+      telegram_message_id: messageId,
+      telegram_chat_id: chatId
+    });
+    
+    console.log(`📌 Group message stored for callback ${callbackId}`);
+  } catch (error) {
+    console.error('❌ Error storing group message:', error.message);
+  }
+};
+
+// Get group message with database fallback
+const getGroupMessage = async (callbackId) => {
+  try {
+    // First try memory
+    let messageData = groupMessages.get(callbackId);
+    
+    if (!messageData) {
+      // Fallback to database
+      const { getCallbackById } = await import('./callbackService.js');
+      const callback = await getCallbackById(callbackId);
+      
+      if (callback && callback.telegram_message_id && callback.telegram_chat_id) {
+        messageData = {
+          messageId: callback.telegram_message_id,
+          chatId: callback.telegram_chat_id
+        };
+        // Store back in memory for next time
+        groupMessages.set(callbackId, messageData);
+        console.log(`🔄 Restored group message from database for callback ${callbackId}`);
+      }
+    }
+    
+    return messageData;
+  } catch (error) {
+    console.error('❌ Error getting group message:', error.message);
+    return null;
+  }
+};
 
 // Start collecting additional information from worker
 const startInfoCollection = async (userId, callbackId, userName) => {
@@ -275,7 +319,11 @@ ${callback.problem_description ? `❓ *Проблема:* ${callback.problem_des
 
 // Handle callback queries (button presses)
 export const handleCallbackQuery = async (callbackQuery) => {
+  console.log('🔘 Raw callback query received:', callbackQuery.data);
   console.log('🔘 Callback query received:', callbackQuery.data, 'from user:', callbackQuery.from.first_name);
+  
+  // Immediate answer to prevent multiple clicks
+  await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Обрабатываем...' });
   
   const { data, from, message } = callbackQuery;
   
@@ -376,8 +424,8 @@ export const handleCallbackQuery = async (callbackQuery) => {
       await updateCallbackStatus(callbackId, statusUpdate);
     }
     
-    // Send response
-    await bot.answerCallbackQuery(callbackQuery.id, { text: responseText });
+    // Send final response
+    await bot.answerCallbackQuery(callbackQuery.id, { text: responseText, show_alert: false });
     
     // Update the original group message if it exists (use short format for completed/scheduled)
     const useShortFormat = action === 'complete' || (statusUpdate.status && (statusUpdate.status === 'completed' || statusUpdate.status === 'in_progress'));
@@ -394,7 +442,7 @@ export const handleCallbackQuery = async (callbackQuery) => {
 // Update the original group message with status changes
 const updateGroupMessage = async (callbackId, statusText, newKeyboard, useShortFormat = false) => {
   try {
-    const messageData = groupMessages.get(callbackId);
+    const messageData = await getGroupMessage(callbackId);
     if (!messageData) {
       console.log(`⚠️ No group message found for callback ${callbackId}`);
       return;
@@ -524,6 +572,9 @@ const scheduleReminder = (userId, callbackId, appointmentDate, clientName, servi
 
 // Cancel scheduled reminder for a specific callback
 const cancelScheduledReminder = (userId, callbackId) => {
+  let found = false;
+  
+  // Try primary key format
   const jobKey = `${callbackId}_${userId}`;
   const scheduledJob = scheduledJobs.get(jobKey);
   
@@ -531,11 +582,35 @@ const cancelScheduledReminder = (userId, callbackId) => {
     clearTimeout(scheduledJob.timeoutId);
     scheduledJobs.delete(jobKey);
     console.log(`⏰ Cancelled reminder for callback ${callbackId}`);
-    return true;
+    found = true;
   }
   
-  console.log(`⏰ No reminder found to cancel for callback ${callbackId}`);
-  return false;
+  // Try alternative key formats (fallback for old reminders)
+  const altKeys = [
+    `${userId}_${callbackId}`,
+    callbackId,
+    `reminder_${callbackId}`
+  ];
+  
+  altKeys.forEach(key => {
+    const job = scheduledJobs.get(key);
+    if (job) {
+      if (job.timeoutId) {
+        clearTimeout(job.timeoutId);
+      } else {
+        clearTimeout(job);
+      }
+      scheduledJobs.delete(key);
+      console.log(`⏰ Cancelled fallback reminder for callback ${callbackId} (key: ${key})`);
+      found = true;
+    }
+  });
+  
+  if (!found) {
+    console.log(`⏰ No reminder found to cancel for callback ${callbackId}`);
+  }
+  
+  return found;
 };
 
 // Handle info collection process
