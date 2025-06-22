@@ -69,8 +69,8 @@ export const getRealtimeStatus = () => {
 // Clean disconnect
 export const disconnectRealtime = async () => {
   if (realtimeSubscription) {
-    await supabase.removeSubscription(realtimeSubscription);
+    await supabase.removeChannel(realtimeSubscription); // Use removeChannel or unsubscribe based on your version
     realtimeSubscription = null;
     console.log('🔌 Realtime disconnected');
   }
-}; 
+};
