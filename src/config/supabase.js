@@ -10,30 +10,15 @@ if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Missing Supabase configuration. Please check your environment variables.');
 }
 
-// Create Supabase client with service role key for backend operations
+// Create Supabase client with simple configuration
 export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 2
-    },
-    heartbeatIntervalMs: 30000,
-    reconnectAfterMs: function (tries) {
-      return [1000, 2000, 5000, 10000][tries - 1] || 10000;
-    },
-    timeout: 20000
-  },
-  global: {
-    headers: {
-      'User-Agent': 'true-pros-backend/1.0.0'
-    }
   }
 });
 
-// Test connection
+// Simple connection test
 export const testSupabaseConnection = async () => {
   try {
     console.log('🔍 Testing Supabase connection...');
