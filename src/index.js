@@ -14,7 +14,7 @@ import { testSupabaseConnection } from './config/supabase.js';
 console.log('🤖 Loading Telegram bot...');
 import { testBotConnection, setupTelegramWebhook } from './services/telegramBot.js';
 console.log('📡 Loading realtime service...');
-import { initializeRealtime, startRealtimeHealthMonitor, getRealtimeStatus, reconnectRealtime, testRealtimeConnection } from './services/realtimeService.js';
+import { initializeRealtime, getRealtimeStatus, disconnectRealtime } from './services/realtimeService.js';
 
 // Import routes
 console.log('🛣️ Loading routes...');
@@ -108,7 +108,8 @@ app.get('/api/realtime/status', (req, res) => {
 app.post('/api/realtime/reconnect', async (req, res) => {
   try {
     console.log('🔄 Manual reconnect requested via API');
-    const result = await reconnectRealtime();
+    await disconnectRealtime();
+    const result = await initializeRealtime();
     
     res.json({
       success: true,
@@ -130,12 +131,13 @@ app.post('/api/realtime/reconnect', async (req, res) => {
 app.post('/api/realtime/test', async (req, res) => {
   try {
     console.log('🧪 Realtime test requested via API');
-    const isHealthy = await testRealtimeConnection();
+    const status = getRealtimeStatus();
+    const isHealthy = status === 'ACTIVE';
     
     res.json({
       success: true,
       healthy: isHealthy,
-      status: getRealtimeStatus(),
+      status: status,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
