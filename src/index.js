@@ -243,8 +243,10 @@ const startServer = async () => {
       console.log('🤖 Telegram bot initialized');
     }
     
-    // Initialize realtime subscriptions
+    // Initialize realtime subscriptions (with small delay to prevent Railway startup issues)
     console.log('📡 Initializing realtime subscriptions...');
+    await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+    
     const realtimeChannel = await initializeRealtime();
     
     if (realtimeChannel) {

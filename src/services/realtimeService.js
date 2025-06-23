@@ -3,6 +3,8 @@ import { notifyNewCallback, notifyCallbackCompleted } from './telegramBot.js';
 
 let realtimeSubscription = null;
 let reconnectAttempts = 0;
+let isReconnecting = false; // Prevent multiple reconnection attempts
+let isDatabaseError = false; // Track database connection issues
 const maxReconnectAttempts = 5;
 
 // Simple realtime initialization using modern Supabase v2 API
@@ -13,6 +15,33 @@ export const initializeRealtime = async () => {
     // Clean up existing subscription if it exists
     if (realtimeSubscription) {
       await disconnectRealtime();
+    }
+
+    // Reset reconnection flag when starting fresh
+    isReconnecting = false;
+
+    // If we have a database error, test connection first
+    if (isDatabaseError) {
+      console.log('🔍 Testing database connection before realtime...');
+      try {
+        const { data, error } = await supabase
+          .from('callback_requests')
+          .select('id')
+          .limit(1);
+        
+        if (error) {
+          console.error('❌ Database still unreachable:', error.message);
+          scheduleReconnection();
+          return null;
+        } else {
+          console.log('✅ Database connection restored');
+          isDatabaseError = false;
+        }
+      } catch (testError) {
+        console.error('❌ Database test failed:', testError.message);
+        scheduleReconnection();
+        return null;
+      }
     }
 
     // Create simple subscription using modern channel API
@@ -28,6 +57,7 @@ export const initializeRealtime = async () => {
         (payload) => {
           console.log('🆕 New callback request received');
           reconnectAttempts = 0; // Reset on successful activity
+          isDatabaseError = false; // Clear database error flag
           handleNewCallback(payload.new);
         }
       )
@@ -41,6 +71,7 @@ export const initializeRealtime = async () => {
         (payload) => {
           console.log('🔄 Callback request updated');
           reconnectAttempts = 0; // Reset on successful activity
+          isDatabaseError = false; // Clear database error flag
           handleCallbackUpdate(payload.new, payload.old);
         }
       )
@@ -50,6 +81,8 @@ export const initializeRealtime = async () => {
         if (status === 'SUBSCRIBED') {
           console.log('✅ Realtime subscription active');
           reconnectAttempts = 0;
+          isReconnecting = false; // Clear reconnection flag on success
+          isDatabaseError = false; // Clear database error flag
         } else if (status === 'CHANNEL_ERROR') {
           console.error('❌ Realtime channel error:', err);
           handleRealtimeError(err);
@@ -58,7 +91,10 @@ export const initializeRealtime = async () => {
           scheduleReconnection();
         } else if (status === 'CLOSED') {
           console.warn('🔌 Realtime connection closed');
-          scheduleReconnection();
+          // Only reconnect if we're not already reconnecting
+          if (!isReconnecting) {
+            scheduleReconnection();
+          }
         }
       });
 
@@ -67,7 +103,9 @@ export const initializeRealtime = async () => {
 
   } catch (error) {
     console.error('❌ Realtime error:', error.message);
-    scheduleReconnection();
+    if (!isReconnecting) {
+      scheduleReconnection();
+    }
     return null;
   }
 };
@@ -80,24 +118,47 @@ const handleRealtimeError = (error) => {
   // Check for specific errors
   if (errorMessage.includes('unable to connect to the project database')) {
     console.error('🚨 Database connection error - critical issue');
+    isDatabaseError = true;
+    // For database errors, wait longer before retrying
+    if (!isReconnecting) {
+      scheduleReconnection(30000); // Wait 30 seconds for database issues
+    }
   } else if (errorMessage.includes('permission') || errorMessage.includes('unauthorized')) {
     console.error('🚨 Permission error - check service role key');
+    if (!isReconnecting) {
+      scheduleReconnection(60000); // Wait 1 minute for permission issues
+    }
   } else {
     console.warn('⚠️ Temporary realtime error - will retry');
+    if (!isReconnecting) {
+      scheduleReconnection();
+    }
   }
-  
-  scheduleReconnection();
 };
 
 // Schedule reconnection with backoff
-const scheduleReconnection = () => {
+const scheduleReconnection = (customDelay = null) => {
+  // Prevent multiple simultaneous reconnection attempts
+  if (isReconnecting) {
+    console.log('🔄 Reconnection already in progress, skipping...');
+    return;
+  }
+
   if (reconnectAttempts >= maxReconnectAttempts) {
     console.error(`❌ Max reconnection attempts (${maxReconnectAttempts}) reached`);
+    if (isDatabaseError) {
+      console.error('🚨 Database appears to be permanently unreachable. Stopping reconnection attempts.');
+      console.error('💡 Manual intervention required - check Supabase service status');
+    }
+    isReconnecting = false;
     return;
   }
   
+  isReconnecting = true;
   reconnectAttempts++;
-  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000); // Max 30 seconds
+  
+  // Use custom delay for specific errors, otherwise exponential backoff
+  const delay = customDelay || Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
   
   console.log(`🔄 Scheduling reconnection attempt ${reconnectAttempts}/${maxReconnectAttempts} in ${delay}ms...`);
   
@@ -133,7 +194,8 @@ const handleCallbackUpdate = async (newRecord, oldRecord) => {
 // Get current status
 export const getRealtimeStatus = () => {
   if (!realtimeSubscription) return 'NOT_INITIALIZED';
-  if (reconnectAttempts > 0) return `RECONNECTING_${reconnectAttempts}`;
+  if (isDatabaseError) return 'DATABASE_ERROR';
+  if (isReconnecting) return `RECONNECTING_${reconnectAttempts}`;
   return 'ACTIVE';
 };
 
@@ -149,4 +211,9 @@ export const disconnectRealtime = async () => {
       realtimeSubscription = null; // Force cleanup
     }
   }
+  
+  // Reset flags
+  isReconnecting = false;
+  reconnectAttempts = 0;
+  // Don't reset isDatabaseError here - keep it for next initialization
 };
