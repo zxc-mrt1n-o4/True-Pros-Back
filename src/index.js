@@ -12,7 +12,7 @@ console.log('✅ Basic imports loaded');
 console.log('📦 Loading Supabase config...');
 import { testSupabaseConnection } from './config/supabase.js';
 console.log('🤖 Loading Telegram bot...');
-import { testBotConnection, setupTelegramWebhook } from './services/telegramBot.js';
+import { testBotConnection } from './services/telegramBot.js';
 console.log('📡 Loading realtime service...');
 import { initializeRealtime, getRealtimeStatus, disconnectRealtime } from './services/realtimeService.js';
 
@@ -238,9 +238,7 @@ const startServer = async () => {
     if (!telegramConnected) {
       console.warn('⚠️ Telegram bot connection failed. Notifications will be disabled.');
     } else {
-      // Set up Telegram webhook
-      setupTelegramWebhook();
-      console.log('🤖 Telegram bot initialized');
+      console.log('🤖 Telegram bot initialized with polling');
     }
     
     // Initialize realtime subscriptions (with small delay to prevent Railway startup issues)
