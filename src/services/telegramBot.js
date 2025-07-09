@@ -113,12 +113,12 @@ export const sendDirectMessage = async (chatId, message, options = {}) => {
 export const notifyNewCallback = async (callbackData) => {
   const message = messages.newCallback(callbackData);
   
-  // Create inline keyboard with assignment buttons for Vlad and Denis
+  // Create inline keyboard with assignment buttons for Vlad and Denis (mobile-friendly)
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '👤 Привязать под Влада', callback_data: `assign_vlad_${callbackData.id}` },
-        { text: '👤 Привязать под Дениса', callback_data: `assign_denis_${callbackData.id}` }
+        { text: '👤 Влад', callback_data: `assign_vlad_${callbackData.id}` },
+        { text: '👤 Денис', callback_data: `assign_denis_${callbackData.id}` }
       ]
     ]
   };
