@@ -206,6 +206,7 @@ const getGroupMessage = async (callbackId) => {
 export const handleCallbackQuery = async (callbackQuery) => {
   console.log('🔘 Raw callback query received:', callbackQuery.data);
   console.log('🔘 Callback query received:', callbackQuery.data, 'from user:', callbackQuery.from.first_name);
+  console.log('🔘 Full callback query object:', JSON.stringify(callbackQuery, null, 2));
   
   // Immediate answer to prevent multiple clicks
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Обрабатываем...' });
@@ -219,11 +220,14 @@ export const handleCallbackQuery = async (callbackQuery) => {
     action = 'assign';
     assignedPerson = 'Влад';
     callbackId = data.replace('assign_vlad_', '');
+    console.log('✅ Parsed Vlad assignment:', { action, assignedPerson, callbackId });
   } else if (data.startsWith('assign_denis_')) {
     action = 'assign';
     assignedPerson = 'Денис';
     callbackId = data.replace('assign_denis_', '');
+    console.log('✅ Parsed Denis assignment:', { action, assignedPerson, callbackId });
   } else {
+    console.log('❌ Unknown callback data:', data);
     // Handle unknown actions
     await bot.answerCallbackQuery(callbackQuery.id, { 
       text: '❌ Неизвестное действие' 
@@ -233,10 +237,25 @@ export const handleCallbackQuery = async (callbackQuery) => {
   
   const userName = from.first_name || 'Работник';
   const userId = from.id;
+  console.log('👤 User info:', { userName, userId });
   
   try {
+    console.log('📦 Importing callback service...');
     // Import here to avoid circular dependency
     const { updateCallbackStatus, getCallbackById } = await import('./callbackService.js');
+    console.log('✅ Callback service imported successfully');
+    
+    console.log('🔍 Getting callback by ID:', callbackId);
+    const existingCallback = await getCallbackById(callbackId);
+    console.log('📋 Existing callback:', existingCallback);
+    
+    if (!existingCallback) {
+      console.log('❌ Callback not found in database:', callbackId);
+      await bot.answerCallbackQuery(callbackQuery.id, { 
+        text: '❌ Заявка не найдена' 
+      });
+      return;
+    }
     
     let statusUpdate = {};
     let responseText = '';
@@ -253,21 +272,30 @@ export const handleCallbackQuery = async (callbackQuery) => {
       
       // Remove all buttons after assignment
       newKeyboard = { inline_keyboard: [] };
+      
+      console.log('📝 Status update data:', statusUpdate);
     }
     
     // Update status in database
     if (Object.keys(statusUpdate).length > 0) {
-      await updateCallbackStatus(callbackId, statusUpdate);
+      console.log('💾 Updating callback status in database...');
+      const updatedCallback = await updateCallbackStatus(callbackId, statusUpdate);
+      console.log('✅ Database update successful:', updatedCallback);
     }
     
     // Send final response
+    console.log('📤 Sending final response to user...');
     await bot.answerCallbackQuery(callbackQuery.id, { text: responseText, show_alert: false });
+    console.log('✅ Final response sent');
     
     // Update the original group message
+    console.log('✏️ Updating group message...');
     await updateGroupMessage(callbackId, responseText, newKeyboard, true);
+    console.log('✅ Group message updated');
     
   } catch (error) {
     console.error('❌ Error handling callback query:', error);
+    console.error('❌ Error stack:', error.stack);
     await bot.answerCallbackQuery(callbackQuery.id, { 
       text: '❌ Произошла ошибка при обработке запроса' 
     });
@@ -353,12 +381,40 @@ export const testBotConnection = async () => {
   }
 };
 
+// Set up callback query handler
+bot.on('callback_query', (callbackQuery) => {
+  console.log('🔘 Callback query event received');
+  handleCallbackQuery(callbackQuery).catch(error => {
+    console.error('❌ Unhandled error in callback query handler:', error);
+  });
+});
+
+// Set up message handler for debugging
+bot.on('message', (msg) => {
+  console.log('📨 Message received:', {
+    chatId: msg.chat.id,
+    text: msg.text,
+    from: msg.from.first_name
+  });
+});
+
+// Set up error handler
+bot.on('error', (error) => {
+  console.error('❌ Telegram bot error:', error);
+});
+
+// Set up polling error handler
+bot.on('polling_error', (error) => {
+  console.error('❌ Telegram polling error:', error);
+});
+
 // Initialize bot
 console.log('🤖 Initializing Telegram bot...');
 console.log('📋 Bot features:');
 console.log('   • Assignment system for Vlad and Denis');
 console.log('   • Group notifications');
 console.log('   • Message editing');
+console.log('   • Callback query handling');
 
 // Set up commands
 setBotCommands();

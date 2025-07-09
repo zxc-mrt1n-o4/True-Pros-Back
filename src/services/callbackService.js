@@ -110,6 +110,8 @@ export const getAllCallbacks = async (options = {}) => {
 // Update callback status
 export const updateCallbackStatus = async (id, updateData) => {
   try {
+    console.log('🔄 updateCallbackStatus called with:', { id, updateData });
+    
     const updates = {
       ...updateData,
       updated_at: new Date().toISOString()
@@ -120,6 +122,9 @@ export const updateCallbackStatus = async (id, updateData) => {
       updates.completed_at = new Date().toISOString();
     }
 
+    console.log('📝 Final updates object:', updates);
+    console.log('🎯 Updating record with ID:', id);
+
     const { data, error } = await supabase
       .from('callback_requests')
       .update(updates)
@@ -127,14 +132,19 @@ export const updateCallbackStatus = async (id, updateData) => {
       .select()
       .single();
 
+    console.log('📊 Supabase response:', { data, error });
+
     if (error) {
+      console.error('❌ Supabase error details:', error);
       throw new Error(`Database error: ${error.message}`);
     }
 
-    console.log('✅ Callback status updated:', id);
+    console.log('✅ Callback status updated successfully:', id);
     return data;
   } catch (error) {
     console.error('❌ Error updating callback status:', error);
+    console.error('❌ Error details:', error.message);
+    console.error('❌ Error stack:', error.stack);
     throw error;
   }
 };

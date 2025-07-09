@@ -153,6 +153,47 @@ app.post('/api/realtime/test', async (req, res) => {
 // API routes
 app.use('/api/callbacks', callbackRoutes);
 
+// Test Telegram bot endpoint
+app.post('/api/test/telegram', async (req, res) => {
+  try {
+    console.log('🧪 Testing Telegram bot...');
+    
+    // Import bot functions
+    const { sendToWorkersGroup } = await import('./services/telegramBot.js');
+    
+    // Send test message with buttons
+    const testMessage = `
+🧪 *Тестовое сообщение*
+
+Это тест кнопок назначения.
+🆔 *ID заявки:* \`test-123\`
+`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '👤 Влад', callback_data: 'assign_vlad_test-123' },
+          { text: '👤 Денис', callback_data: 'assign_denis_test-123' }
+        ]
+      ]
+    };
+
+    const result = await sendToWorkersGroup(testMessage, { reply_markup: keyboard });
+    
+    res.json({
+      success: true,
+      message: 'Test message sent to Telegram group',
+      result: result ? 'sent' : 'failed'
+    });
+  } catch (error) {
+    console.error('❌ Error testing Telegram:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
