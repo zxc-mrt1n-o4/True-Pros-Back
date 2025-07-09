@@ -11,8 +11,25 @@ if (!token) {
   throw new Error('TELEGRAM_BOT_TOKEN is required');
 }
 
-// Create bot instance with polling enabled
-export const bot = new TelegramBot(token, { polling: true });
+// Create bot instance with polling enabled and better error handling
+export const bot = new TelegramBot(token, { 
+  polling: {
+    interval: 1000,
+    autoStart: true,
+    params: {
+      timeout: 10,
+      limit: 100,
+      allowed_updates: ['message', 'callback_query']
+    }
+  },
+  request: {
+    agentOptions: {
+      keepAlive: true,
+      keepAliveMsecs: 30000
+    },
+    timeout: 30000
+  }
+});
 
 // Russian text templates
 const messages = {
@@ -209,7 +226,12 @@ export const handleCallbackQuery = async (callbackQuery) => {
   console.log('🔘 Full callback query object:', JSON.stringify(callbackQuery, null, 2));
   
   // Immediate answer to prevent multiple clicks
-  await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Обрабатываем...' });
+  try {
+    await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳ Обрабатываем...' });
+    console.log('✅ Initial callback query answered');
+  } catch (error) {
+    console.error('❌ Error answering initial callback query:', error.message);
+  }
   
   const { data, from, message } = callbackQuery;
   
@@ -285,8 +307,12 @@ export const handleCallbackQuery = async (callbackQuery) => {
     
     // Send final response
     console.log('📤 Sending final response to user...');
-    await bot.answerCallbackQuery(callbackQuery.id, { text: responseText, show_alert: false });
-    console.log('✅ Final response sent');
+    try {
+      await bot.answerCallbackQuery(callbackQuery.id, { text: responseText, show_alert: false });
+      console.log('✅ Final response sent');
+    } catch (error) {
+      console.error('❌ Error sending final response:', error.message);
+    }
     
     // Update the original group message
     console.log('✏️ Updating group message...');
@@ -341,14 +367,25 @@ const updateGroupMessage = async (callbackId, statusText, newKeyboard, useShortF
       updatedMessage = originalMessage + (statusText ? `\n\n🔄 *Обновление:* ${statusText}` : '');
     }
 
-    await bot.editMessageText(updatedMessage, {
-      chat_id: messageData.chatId,
-      message_id: messageData.messageId,
-      parse_mode: 'Markdown',
-      reply_markup: newKeyboard
-    });
+    try {
+      await bot.editMessageText(updatedMessage, {
+        chat_id: messageData.chatId,
+        message_id: messageData.messageId,
+        parse_mode: 'Markdown',
+        reply_markup: newKeyboard
+      });
 
-    console.log(`✅ Group message updated for callback ${callbackId}`);
+      console.log(`✅ Group message updated for callback ${callbackId}`);
+    } catch (editError) {
+      console.error(`❌ Error editing message for callback ${callbackId}:`, editError.message);
+      // Try sending a new message if editing fails
+      try {
+        await sendToWorkersGroup(`🔄 ${updatedMessage}`, { reply_markup: newKeyboard });
+        console.log(`✅ Sent new message instead of editing for callback ${callbackId}`);
+      } catch (sendError) {
+        console.error(`❌ Error sending new message for callback ${callbackId}:`, sendError.message);
+      }
+    }
   } catch (error) {
     console.error(`❌ Error updating group message for callback ${callbackId}:`, error.message);
   }
@@ -400,12 +437,20 @@ bot.on('message', (msg) => {
 
 // Set up error handler
 bot.on('error', (error) => {
-  console.error('❌ Telegram bot error:', error);
+  console.error('❌ Telegram bot error:');
+  console.error('Error message:', error.message);
+  console.error('Error code:', error.code);
+  console.error('Error response:', error.response?.body);
+  console.error('Full error:', JSON.stringify(error, null, 2));
 });
 
 // Set up polling error handler
 bot.on('polling_error', (error) => {
-  console.error('❌ Telegram polling error:', error);
+  console.error('❌ Telegram polling error:');
+  console.error('Error message:', error.message);
+  console.error('Error code:', error.code);
+  console.error('Error response:', error.response?.body);
+  console.error('Full error:', JSON.stringify(error, null, 2));
 });
 
 // Initialize bot
