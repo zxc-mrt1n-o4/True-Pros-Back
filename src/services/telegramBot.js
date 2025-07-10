@@ -268,14 +268,33 @@ export const handleCallbackQuery = async (callbackQuery) => {
     console.log('✅ Callback service imported successfully');
     
     console.log('🔍 Getting callback by ID:', callbackId);
+    
+    // Handle test callbacks differently
+    if (callbackId.startsWith('test-')) {
+      console.log('🧪 Processing test callback:', callbackId);
+      const responseText = `👤 Тест: заявка привязана под ${assignedPerson} (назначил: ${userName})`;
+      
+      try {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: responseText, show_alert: false });
+        console.log('✅ Test callback processed successfully');
+      } catch (error) {
+        console.error('❌ Error processing test callback:', error.message);
+      }
+      return;
+    }
+    
     const existingCallback = await getCallbackById(callbackId);
     console.log('📋 Existing callback:', existingCallback);
     
     if (!existingCallback) {
       console.log('❌ Callback not found in database:', callbackId);
-      await bot.answerCallbackQuery(callbackQuery.id, { 
-        text: '❌ Заявка не найдена' 
-      });
+      try {
+        await bot.answerCallbackQuery(callbackQuery.id, { 
+          text: '❌ Заявка не найдена' 
+        });
+      } catch (error) {
+        console.error('❌ Error sending not found response:', error.message);
+      }
       return;
     }
     

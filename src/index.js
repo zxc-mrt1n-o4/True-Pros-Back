@@ -46,6 +46,8 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://true-pros.org',
   'https://www.true-pros.org',
+  'https://clt-tp.com',
+  'https://www.clt-tp.com',
   process.env.FRONTEND_URL
 ].filter(Boolean);
 
