@@ -68,7 +68,9 @@ const formatUTM = (utmData) => {
 // Russian text templates
 const messages = {
   newCallback: (data) => {
-    const utmFormatted = formatUTM(data.fromWhichUTM);
+    // Check both lowercase (database) and camelCase (for backward compatibility)
+    const utmData = data.fromwhichutm || data.fromWhichUTM;
+    const utmFormatted = formatUTM(utmData);
     const utmSection = utmFormatted ? `\n📊 *UTM:* ${utmFormatted}` : '';
     
     return `
@@ -395,12 +397,17 @@ const updateGroupMessage = async (callbackId, statusText, newKeyboard, useShortF
     
     // Format message with assignment information
     if (callback.status === 'in_progress' && callback.assigned_to) {
+      // Check both lowercase (database) and camelCase (for backward compatibility)
+      const utmData = callback.fromwhichutm || callback.fromWhichUTM;
+      const utmFormatted = formatUTM(utmData);
+      const utmSection = utmFormatted ? `\n📊 *UTM:* ${utmFormatted}` : '';
+      
       updatedMessage = `
 🔔 *Заявка привязана под ${callback.assigned_to}*
 
 👤 *Имя:* ${callback.name}
 📞 *Телефон:* ${callback.phone}
-🔧 *Услуга:* ${callback.service_type || 'Не указана'}
+🔧 *Услуга:* ${callback.service_type || 'Не указана'}${utmSection}
 🕐 *Время:* ${new Date(callback.created_at).toLocaleString('ru-RU')}
 🆔 *ID заявки:* \`${callback.id}\`
 
