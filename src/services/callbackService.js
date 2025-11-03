@@ -9,13 +9,17 @@ export const createCallbackRequest = async (callbackData) => {
       name: callbackData.name,
       phone: callbackData.phone,
       service_type: callbackData.service_type || null,
-      fromWhichUTM: callbackData.fromWhichUTM || null,
       status: 'pending',
       created_at: new Date().toISOString(),
       updated_at: null,
       completed_at: null,
       completed_by: null
     };
+
+    // Only include fromWhichUTM if provided (column may not exist yet if migration not run)
+    if (callbackData.fromWhichUTM) {
+      newCallback.fromWhichUTM = callbackData.fromWhichUTM;
+    }
 
     const { data, error } = await supabase
       .from('callback_requests')
@@ -25,10 +29,33 @@ export const createCallbackRequest = async (callbackData) => {
 
     if (error) {
       console.error('❌ Error creating callback request:', error);
+      
+      // If error is about missing column, try without UTM field
+      if (error.code === 'PGRST204' && error.message?.includes('fromWhichUTM')) {
+        console.warn('⚠️ fromWhichUTM column not found, retrying without UTM field...');
+        delete newCallback.fromWhichUTM;
+        
+        const { data: retryData, error: retryError } = await supabase
+          .from('callback_requests')
+          .insert([newCallback])
+          .select()
+          .single();
+        
+        if (retryError) {
+          throw new Error(`Database error: ${retryError.message}`);
+        }
+        
+        console.log('✅ Callback request created (without UTM):', retryData.id);
+        return retryData;
+      }
+      
       throw new Error(`Database error: ${error.message}`);
     }
 
     console.log('✅ Callback request created:', data.id);
+    if (callbackData.fromWhichUTM) {
+      console.log('📊 UTM data included:', callbackData.fromWhichUTM);
+    }
     return data;
   } catch (error) {
     console.error('❌ Error in createCallbackRequest:', error);
