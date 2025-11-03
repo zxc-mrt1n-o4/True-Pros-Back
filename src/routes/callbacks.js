@@ -13,7 +13,7 @@ const router = express.Router();
 // POST /api/callbacks - Create new callback request
 router.post('/', async (req, res) => {
   try {
-    const { name, phone, service_type } = req.body;
+    const { name, phone, service_type, fromWhichUTM } = req.body;
 
     // Validation
     if (!name || !phone) {
@@ -35,7 +35,8 @@ router.post('/', async (req, res) => {
     const callbackData = {
       name: name.trim(),
       phone: phone.trim(),
-      service_type: service_type?.trim() || null
+      service_type: service_type?.trim() || null,
+      fromWhichUTM: fromWhichUTM || null
     };
 
     const result = await createCallbackRequest(callbackData);

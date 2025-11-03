@@ -9,6 +9,7 @@ export const createCallbackRequest = async (callbackData) => {
       name: callbackData.name,
       phone: callbackData.phone,
       service_type: callbackData.service_type || null,
+      fromWhichUTM: callbackData.fromWhichUTM || null,
       status: 'pending',
       created_at: new Date().toISOString(),
       updated_at: null,

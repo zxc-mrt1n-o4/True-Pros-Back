@@ -31,19 +31,58 @@ export const bot = new TelegramBot(token, {
   }
 });
 
+// Status translations
+const getStatusText = (status) => {
+  const statusMap = {
+    'pending': '⏳ Ожидает',
+    'in_progress': '🔄 В работе',
+    'contacted': '📞 Связались',
+    'completed': '✅ Выполнено',
+    'cancelled': '❌ Отменено'
+  };
+  return statusMap[status] || status;
+};
+
+// Format UTM parameters for display
+const formatUTM = (utmData) => {
+  if (!utmData) return null;
+  
+  try {
+    // Try to parse as JSON
+    const utm = typeof utmData === 'string' ? JSON.parse(utmData) : utmData;
+    
+    const parts = [];
+    if (utm.source) parts.push(`Источник: ${utm.source}`);
+    if (utm.medium) parts.push(`Канал: ${utm.medium}`);
+    if (utm.campaign) parts.push(`Кампания: ${utm.campaign}`);
+    if (utm.term) parts.push(`Термин: ${utm.term}`);
+    if (utm.content) parts.push(`Контент: ${utm.content}`);
+    
+    return parts.length > 0 ? parts.join(' | ') : null;
+  } catch (e) {
+    // If not JSON, return as is
+    return utmData;
+  }
+};
+
 // Russian text templates
 const messages = {
-  newCallback: (data) => `
+  newCallback: (data) => {
+    const utmFormatted = formatUTM(data.fromWhichUTM);
+    const utmSection = utmFormatted ? `\n📊 *UTM:* ${utmFormatted}` : '';
+    
+    return `
 🔔 *Новая заявка на обратный звонок*
 
 👤 *Имя:* ${data.name}
 📞 *Телефон:* ${data.phone}
-🔧 *Услуга:* ${data.service_type || 'Не указана'}
+🔧 *Услуга:* ${data.service_type || 'Не указана'}${utmSection}
 🕐 *Время:* ${new Date(data.created_at).toLocaleString('ru-RU')}
 🆔 *ID заявки:* \`${data.id}\`
 
 📋 *Статус:* ${getStatusText(data.status)}
-`,
+`;
+  },
 
   callbackCompleted: (data) => `
 ✅ *Заявка выполнена*
@@ -66,18 +105,6 @@ ${message}
 
 \`${error}\`
 `
-};
-
-// Status translations
-const getStatusText = (status) => {
-  const statusMap = {
-    'pending': '⏳ Ожидает',
-    'in_progress': '🔄 В работе',
-    'contacted': '📞 Связались',
-    'completed': '✅ Выполнено',
-    'cancelled': '❌ Отменено'
-  };
-  return statusMap[status] || status;
 };
 
 // Send message to workers group
