@@ -16,9 +16,10 @@ export const createCallbackRequest = async (callbackData) => {
       completed_by: null
     };
 
-    // Only include fromWhichUTM if provided (column may not exist yet if migration not run)
+    // Only include fromWhichUTM if provided (use lowercase to match database column name)
     if (callbackData.fromWhichUTM) {
-      newCallback.fromWhichUTM = callbackData.fromWhichUTM;
+      // Use lowercase 'fromwhichutm' to match the actual database column name
+      newCallback.fromwhichutm = callbackData.fromWhichUTM;
     }
 
     const { data, error } = await supabase
@@ -31,9 +32,9 @@ export const createCallbackRequest = async (callbackData) => {
       console.error('❌ Error creating callback request:', error);
       
       // If error is about missing column, try without UTM field
-      if (error.code === 'PGRST204' && error.message?.includes('fromWhichUTM')) {
-        console.warn('⚠️ fromWhichUTM column not found, retrying without UTM field...');
-        delete newCallback.fromWhichUTM;
+      if (error.code === 'PGRST204' && (error.message?.includes('fromWhichUTM') || error.message?.includes('fromwhichutm'))) {
+        console.warn('⚠️ fromwhichutm column not found, retrying without UTM field...');
+        delete newCallback.fromwhichutm;
         
         const { data: retryData, error: retryError } = await supabase
           .from('callback_requests')
