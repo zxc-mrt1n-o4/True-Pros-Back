@@ -1,3 +1,8 @@
+// src/index.js (modified)
+// NOTE: This is the full updated file contents. It removes the old /health handler
+// that synchronously called getRealtimeStatus() and instead registers the new
+// lightweight liveness + readiness routes and sets readiness flags after init.
+
 console.log('📄 Loading index.js...');
 
 import express from 'express';
@@ -15,6 +20,9 @@ console.log('🤖 Loading Telegram bot...');
 import { testBotConnection } from './services/telegramBot.js';
 console.log('📡 Loading realtime service...');
 import { initializeRealtime, getRealtimeStatus, disconnectRealtime } from './services/realtimeService.js';
+
+// Import health helpers (Railway-friendly)
+import registerHealthRoutes, { setSupabaseReady, setRealtimeReady, setTelegramReady } from './health.js';
 
 // Import routes
 console.log('🛣️ Loading routes...');
@@ -75,18 +83,8 @@ app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  const realtimeStatus = getRealtimeStatus();
-  
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development',
-    realtime: realtimeStatus
-  });
-});
+// Register Railway-friendly health routes (liveness + readiness)
+registerHealthRoutes(app);
 
 // Realtime status endpoint
 app.get('/api/realtime/status', (req, res) => {
@@ -165,10 +163,10 @@ app.post('/api/test/telegram', async (req, res) => {
     
     // Send test message with buttons
     const testMessage = `
-🧪 *Тестовое сообщение*
+ 🧪 *Тестовое сообщение*
 
-Это тест кнопок назначения.
-🆔 *ID заявки:* \`test-123\`
+ Это тест кнопок назначения.
+ 🆔 *ID заявки:* \`test-123\`
 `;
 
     const keyboard = {
@@ -203,6 +201,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
+      readiness: '/health/ready',
       callbacks: '/api/callbacks',
       documentation: 'See README.md for API documentation'
     }
@@ -276,12 +275,16 @@ const startServer = async () => {
       console.error('❌ Supabase connection failed. Please check your configuration.');
       process.exit(1);
     }
+    // Mark supabase readiness for the readiness probe
+    setSupabaseReady(true);
     
     const telegramConnected = await testBotConnection();
     if (!telegramConnected) {
       console.warn('⚠️ Telegram bot connection failed. Notifications will be disabled.');
+      setTelegramReady(false);
     } else {
       console.log('🤖 Telegram bot initialized with polling');
+      setTelegramReady(true);
     }
     
     // Initialize realtime subscriptions (with small delay to prevent Railway startup issues)
@@ -292,8 +295,10 @@ const startServer = async () => {
     
     if (realtimeChannel) {
       console.log('✅ Realtime subscriptions active');
+      setRealtimeReady(true);
     } else {
       console.warn('⚠️ Realtime initialization failed. Will attempt automatic reconnection.');
+      setRealtimeReady(false);
     }
     
     // Start server
@@ -302,6 +307,7 @@ const startServer = async () => {
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 API URL: http://localhost:${PORT}`);
       console.log(`💚 Health check: http://localhost:${PORT}/health`);
+      console.log(`🟢 Readiness: http://localhost:${PORT}/health/ready`);
       console.log('📋 Ready to handle callback requests!');
     });
     
@@ -321,4 +327,4 @@ const startServer = async () => {
 export { app };
 
 // Start server
-startServer().catch(console.error); 
+startServer().catch(console.error);
