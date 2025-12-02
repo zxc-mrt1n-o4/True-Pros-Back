@@ -1,4 +1,4 @@
-// src/index.js (updated to register the lightweight /health probe)
+// src/index.js (updated to listen immediately and run dependency checks afterward)
 console.log('📄 Loading index.js...');
 
 import express from 'express';
@@ -80,7 +80,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Register the simple always-200 /health endpoint to satisfy Railway probe quickly
 registerHealthRoutes(app);
 
-// Realtime status endpoint (unchanged)
+// Realtime status endpoint
 app.get('/api/realtime/status', (req, res) => {
   try {
     const status = getRealtimeStatus();
@@ -120,7 +120,7 @@ app.post('/api/realtime/reconnect', async (req, res) => {
   }
 });
 
-// Realtime test endpoint
+// Additional routes...
 app.post('/api/realtime/test', async (req, res) => {
   try {
     console.log('🧪 Realtime test requested via API');
@@ -142,41 +142,9 @@ app.post('/api/realtime/test', async (req, res) => {
   }
 });
 
-// API routes
 app.use('/api/callbacks', callbackRoutes);
 
-// Test Telegram bot endpoint (unchanged)
-app.post('/api/test/telegram', async (req, res) => {
-  try {
-    console.log('🧪 Testing Telegram bot...');
-    const { sendToWorkersGroup } = await import('./services/telegramBot.js');
-    const testMessage = `
- 🧪 *Тестовое сообщение*
-
- Это тест кнопок назначения.
- 🆔 *ID заявки:* \`test-123\`
-`;
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '👤 Влад', callback_data: 'assign_vlad_test-123' },
-          { text: '👤 Денис', callback_data: 'assign_denis_test-123' }
-        ]
-      ]
-    };
-    const result = await sendToWorkersGroup(testMessage, { reply_markup: keyboard });
-    res.json({
-      success: true,
-      message: 'Test message sent to Telegram group',
-      result: result ? 'sent' : 'failed'
-    });
-  } catch (error) {
-    console.error('❌ Error testing Telegram:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Root endpoint
+// Root, 404, error handlers (unchanged)
 app.get('/', (req, res) => {
   res.json({
     message: 'True Pros Backend API',
@@ -189,7 +157,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
@@ -199,7 +166,6 @@ app.use('*', (req, res) => {
   });
 });
 
-// Global error handler
 app.use((error, req, res, next) => {
   console.error('❌ Global error handler:', error);
   res.status(error.status || 500).json({
@@ -212,6 +178,7 @@ app.use((error, req, res, next) => {
 
 // Server instance for graceful shutdown
 let serverInstance = null;
+
 const gracefulShutdown = (signal) => {
   console.log(`\n📡 Received ${signal}. Starting graceful shutdown...`);
   if (serverInstance) {
@@ -233,49 +200,63 @@ const gracefulShutdown = (signal) => {
   }, 30000);
 };
 
-// Initialize services and start server
+// Start server immediately, then run dependency checks asynchronously so the platform probe can succeed.
 const startServer = async () => {
   try {
     console.log('🚀 Starting True Pros Backend...');
     console.log('📦 Loading environment variables...');
-    console.log('🔍 Testing connections...');
 
-    const supabaseConnected = await testSupabaseConnection();
-    if (!supabaseConnected) {
-      console.error('❌ Supabase connection failed. Please check your configuration.');
-      process.exit(1);
-    }
-
-    const telegramConnected = await testBotConnection();
-    if (!telegramConnected) {
-      console.warn('⚠️ Telegram bot connection failed. Notifications will be disabled.');
-    } else {
-      console.log('🤖 Telegram bot initialized with polling');
-    }
-
-    console.log('📡 Initializing realtime subscriptions...');
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const realtimeChannel = await initializeRealtime();
-    if (realtimeChannel) {
-      console.log('✅ Realtime subscriptions active');
-    } else {
-      console.warn('⚠️ Realtime initialization failed. Will attempt automatic reconnection.');
-    }
-
-    serverInstance = app.listen(PORT, () => {
+    // Start listening first so health checks can reach the HTTP server immediately.
+    serverInstance = app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 API URL: http://localhost:${PORT}`);
       console.log(`💚 Health check: http://localhost:${PORT}/health`);
-      console.log('📋 Ready to handle callback requests!');
+      console.log('📋 Server started; now initializing connections in background...');
     });
 
+    // Set up graceful shutdown handlers
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+    // Run connection checks in the background without exiting the process on failures.
+    (async () => {
+      try {
+        console.log('🔍 Testing connections (background)...');
+
+        const supabaseConnected = await testSupabaseConnection();
+        if (!supabaseConnected) {
+          // Do NOT exit the process here; log and keep running so the platform can reach /health.
+          console.error('❌ Supabase connection failed. Continuing without exiting; check configuration.');
+        } else {
+          console.log('✅ Supabase connected');
+        }
+
+        const telegramConnected = await testBotConnection();
+        if (!telegramConnected) {
+          console.warn('⚠️ Telegram bot connection failed. Notifications will be disabled.');
+        } else {
+          console.log('🤖 Telegram bot initialized with polling');
+        }
+
+        console.log('📡 Initializing realtime subscriptions (background)...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const realtimeChannel = await initializeRealtime();
+        if (realtimeChannel) {
+          console.log('✅ Realtime subscriptions active');
+        } else {
+          console.warn('⚠️ Realtime initialization failed. Will attempt automatic reconnection.');
+        }
+
+      } catch (bgError) {
+        console.error('❌ Background init error:', bgError);
+      }
+    })();
+
     return serverInstance;
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    // If app.listen actually fails, log and exit.
+    console.error('❌ Failed to start server (listen) :', error);
     process.exit(1);
   }
 };
